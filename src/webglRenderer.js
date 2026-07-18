@@ -1,5 +1,10 @@
 import { VERT_WEBGL1, FRAG_WEBGL1, VERT_WEBGL2, FRAG_WEBGL2 } from "./shaders.js";
 
+function splitDouble(x) {
+  const hi = Math.fround(x);
+  return [hi, x - hi];
+}
+
 function createShader(gl, type, source) {
   const shader = gl.createShader(type);
   gl.shaderSource(shader, source);
@@ -59,7 +64,8 @@ function buildRenderer(canvas, gl, kind, vert, frag, isWebGL2) {
   const bind = bindQuad(gl, program, isWebGL2);
   const uniforms = {
     res: gl.getUniformLocation(program, "u_res"),
-    center: gl.getUniformLocation(program, "u_center"),
+    centerHi: gl.getUniformLocation(program, "u_center_hi"),
+    centerLo: gl.getUniformLocation(program, "u_center_lo"),
     scale: gl.getUniformLocation(program, "u_scale"),
     iters: gl.getUniformLocation(program, "u_iters"),
     time: gl.getUniformLocation(program, "u_time"),
@@ -82,10 +88,13 @@ function buildRenderer(canvas, gl, kind, vert, frag, isWebGL2) {
 
   function render({ centerX, centerY, scale, iters, time, palette }) {
     resize();
+    const [cxHi, cxLo] = splitDouble(centerX);
+    const [cyHi, cyLo] = splitDouble(centerY);
     gl.useProgram(program);
     bind();
     gl.uniform2f(uniforms.res, canvas.width, canvas.height);
-    gl.uniform2f(uniforms.center, centerX, centerY);
+    gl.uniform2f(uniforms.centerHi, cxHi, cyHi);
+    gl.uniform2f(uniforms.centerLo, cxLo, cyLo);
     gl.uniform1f(uniforms.scale, scale);
     gl.uniform1f(uniforms.iters, iters);
     gl.uniform1f(uniforms.time, time);
@@ -96,15 +105,15 @@ function buildRenderer(canvas, gl, kind, vert, frag, isWebGL2) {
 
   resize();
   render({
-    centerX: -0.5,
-    centerY: 0,
-    scale: 2.5,
-    iters: 80,
+    centerX: -0.7436438870371587,
+    centerY: 0.13182590420531197,
+    scale: 0.01,
+    iters: 120,
     time: 0,
     palette: 0,
   });
 
-  return { kind, resize, render, canvas };
+  return { kind, resize, render, canvas, deep: true };
 }
 
 function replaceCanvas(oldCanvas) {
@@ -116,7 +125,6 @@ function replaceCanvas(oldCanvas) {
   return fresh;
 }
 
-/** Try WebGL2, then WebGL1. Returns null if neither works. */
 export function createWebGLRenderer(canvas) {
   let poisoned = false;
 

@@ -96,5 +96,5 @@ export function createCanvasRenderer(canvas) {
     ctx.putImageData(imageData, 0, 0);
   }
 
-  return { kind: "canvas2d", resize, render, canvas };
+  return { kind: "canvas2d", resize, render, canvas, deep: true };
 }
