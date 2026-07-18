@@ -6,8 +6,8 @@ void main() {
 }
 `;
 
-// Sharp, simple float Mandelbrot. We intentionally stay above the mosaic zone
-// in JS (early relay), so double-float complexity isn't needed.
+// Fast highp float Mandelbrot — continuous dive into a user-chosen point.
+// We stop before mosaic (no automatic place-switching).
 export const FRAG_WEBGL2 = `#version 300 es
 precision highp float;
 
@@ -41,7 +41,6 @@ vec3 palette(float t, float mode) {
 }
 
 void main() {
-  // Use pixel-centered coords for stabler sampling
   vec2 pix = gl_FragCoord.xy - 0.5;
   vec2 uv = (pix / u_res) * 2.0 - 1.0;
   uv.x *= u_aspect;

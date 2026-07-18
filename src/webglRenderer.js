@@ -56,12 +56,11 @@ function bindQuad(gl, program, isWebGL2) {
 
 function probePrecision(gl) {
   const fmt = gl.getShaderPrecisionFormat(gl.FRAGMENT_SHADER, gl.HIGH_FLOAT);
-  // true highp roughly has precision >= 23 mantissa bits reported as range/precision
   const okHighp = fmt && fmt.precision >= 23;
   return {
     highp: !!okHighp,
-    // Relay before float error gets visible on real phones
-    minScale: okHighp ? 1.2e-4 : 3e-4,
+    // Stop before mosaic — never auto-hop to another landmark
+    minScale: okHighp ? 1.5e-4 : 4e-4,
   };
 }
 
@@ -108,10 +107,10 @@ function buildRenderer(canvas, gl, kind, vert, frag, isWebGL2) {
 
   resize();
   render({
-    centerX: -0.7436438870371587,
-    centerY: 0.13182590420531197,
-    scale: 0.05,
-    iters: 120,
+    centerX: -0.5,
+    centerY: 0,
+    scale: 2.2,
+    iters: 160,
     time: 0,
     palette: 0,
   });

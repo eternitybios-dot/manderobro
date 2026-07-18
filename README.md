@@ -1,45 +1,25 @@
 # 深層 — Infinite Mandelbrot
 
-スマホで見れる、マンデルブロ集合を**永遠に自動拡大**するフラクタル探索アプリ。
+タップで場所を選んで、マンデルブロ集合を**切り替わらず連続拡大**するスマホ向けアプリ。
 
-## スマホで見る（公開・動作確認済み）
+## スマホで見る
 
-**https://dazzling-wave-0y8br5b.shipstatic.com**
+**https://clear-firefly-aa0y8r7.shipstatic.com**
 
-開くと自動で拡大します。途中で引き戻らず、暗転フェードのあと次の深みへ継ぎます。
+1. 画面をタップして潜る場所を選ぶ
+2. その地点へ連続で拡大（場所の自動切替なし）
+3. SPEED で速さ変更 / ドラッグで移動 / ピンチで拡大縮小
 
-恒久公開したい場合（任意）: [このリンクでサイトを claim](https://my.shipstatic.com/claim/e16cecb33b57929bc21671d428884ea2d0c306c29ca0e9bc12687acee0c902b9)
+精度の限界まで行くと止まります。別の場所を見るときは「戻る」かピンチアウトしてから、もう一度タップ。
 
-## 使い方
-
-1. 開くと自動で拡大が始まります
-2. **SPEED** で速さを変更（停止〜最速）
-3. ピンチ / ドラッグでも操作できます
-4. 「配色」でカラー切替
+恒久化（任意）: https://my.shipstatic.com/claim/980458c63545ad44bf1cb39cb8ef96665a42670a998539433f730918af11ab51
 
 ## 開発
 
 ```bash
 npm install
 npm run build
-npm run preview -- --host 0.0.0.0 --port 4173
-```
-
-動作確認:
-
-```bash
+npm run preview
 APP_URL=http://127.0.0.1:4173/ npm run verify:motion
-```
-
-再公開:
-
-```bash
-npm run build
 npm run deploy
 ```
-
-## 技術
-
-- WebGL2 / WebGL1（Canvas2D フォールバック）
-- 精度が崩れる前にフェード中継してシャープさを維持
-- `npm run verify:motion` で公開前チェック

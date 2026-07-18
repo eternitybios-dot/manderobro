@@ -11,7 +11,7 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta
       name="description"
-      content="マンデルブロ集合を永遠に自動拡大できる、見てて楽しいスマホ向けフラクタル探索アプリ"
+      content="タップで場所を選んで、マンデルブロ集合を連続拡大できるスマホ向けアプリ"
     />
     <link rel="manifest" href="/manifest.webmanifest" />
     <title>深層 — Infinite Mandelbrot</title>
@@ -26,7 +26,7 @@
   <body>
     <div id="app">
       <canvas id="gl" aria-label="マンデルブロ集合"></canvas>
-      <div class="fade-veil" id="fadeVeil" aria-hidden="true"></div>
+      <div class="aim" id="aim" aria-hidden="true"></div>
 
       <div class="vignette" aria-hidden="true"></div>
       <div class="grain" aria-hidden="true"></div>
@@ -53,9 +53,11 @@
       </div>
 
       <div class="hint" id="hint">
-        <p>シャープなまま、永遠に拡大し続けます</p>
-        <p class="hint-sub">SPEED で速さを自由に変えられます</p>
+        <p>画面をタップして、潜る場所を選ぶ</p>
+        <p class="hint-sub">選んだ地点へ、切り替わらず連続拡大します</p>
       </div>
+
+      <p class="limit-note" id="limitNote" hidden>この地点は精度の限界です。別の場所をタップするか「戻る」</p>
 
       <footer class="dock">
         <section class="speed-panel" aria-label="拡大スピード">
@@ -69,7 +71,7 @@
             id="speedSlider"
             min="0"
             max="100"
-            value="35"
+            value="40"
             step="1"
             aria-label="拡大スピード"
           />
@@ -81,7 +83,7 @@
         </section>
 
         <div class="controls">
-          <button type="button" class="ctl" id="resetBtn" aria-label="最初に戻る">
+          <button type="button" class="ctl" id="resetBtn" aria-label="全体に戻る">
             <span class="ctl-icon">↺</span>
             <span class="ctl-label">戻る</span>
           </button>

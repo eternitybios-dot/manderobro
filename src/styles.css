@@ -44,13 +44,65 @@ body {
   overflow: hidden;
 }
 
-.fade-veil {
+.aim {
   position: absolute;
-  inset: 0;
-  z-index: 3;
+  width: 54px;
+  height: 54px;
+  margin: -27px 0 0 -27px;
+  border: 1.5px solid rgba(232, 247, 244, 0.85);
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(61, 224, 197, 0.35), 0 0 28px rgba(61, 224, 197, 0.35);
   pointer-events: none;
-  background: #041015;
+  z-index: 4;
   opacity: 0;
+  transform: scale(0.7);
+  transition: opacity 0.25s ease, transform 0.35s ease;
+}
+
+.aim::before,
+.aim::after {
+  content: "";
+  position: absolute;
+  background: rgba(232, 247, 244, 0.9);
+}
+
+.aim::before {
+  left: 50%;
+  top: 8px;
+  bottom: 8px;
+  width: 1px;
+  transform: translateX(-50%);
+}
+
+.aim::after {
+  top: 50%;
+  left: 8px;
+  right: 8px;
+  height: 1px;
+  transform: translateY(-50%);
+}
+
+.aim.show {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.limit-note {
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  bottom: calc(168px + var(--safe-bottom));
+  z-index: 5;
+  margin: 0;
+  padding: 10px 14px;
+  text-align: center;
+  font-size: 0.78rem;
+  letter-spacing: 0.06em;
+  color: var(--foam);
+  background: rgba(4, 16, 21, 0.72);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  backdrop-filter: blur(12px);
 }
 
 #gl {

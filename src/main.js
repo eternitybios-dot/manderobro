@@ -1,32 +1,11 @@
 import { createWebGLRenderer } from "./webglRenderer.js";
 import { createCanvasRenderer } from "./canvasRenderer.js";
 
-/**
- * Dive landmarks. Auto-zoom ONLY moves inward.
- * When precision would mosaic, we fade → snap to the next site → fade in,
- * never animating a zoom-out.
- */
-const DIVE_SITES = [
-  { x: -0.7436438870371587, y: 0.13182590420531197 },
-  { x: -0.7487663670389055, y: 0.06574877392439881 },
-  { x: -0.77568377, y: 0.13646737 },
-  { x: -1.768778833, y: -0.001738827 },
-  { x: -0.16070135, y: 1.0375665 },
-  { x: -0.5622799008959947, y: 0.6428147914776039 },
-  { x: 0.28171792161596434, y: 0.5771052841488505 },
-  { x: -0.745428, y: 0.113009 },
-  { x: -0.235125, y: 0.827215 },
-  { x: -0.10109636384562, y: 0.95628651080914 },
-  { x: -0.81159812898999, y: 0.18969156891408 },
-  { x: -0.374978534, y: 0.659846321 },
-  { x: -1.25066, y: 0.02012 },
-  { x: 0.001643721971153, y: -0.822467633298876 },
-];
-
-const INITIAL_SCALE = 1.8;
-/** After a fade snap, resume here — still sharp, long dive ahead. */
-const RELAY_SCALE = 0.06;
+/** Classic overview — user taps to choose where to dive. No automatic site hops. */
+const START = { x: -0.5, y: 0.0 };
+const INITIAL_SCALE = 2.2;
 const MAX_SCALE = 3.5;
+const TAP_SLOP_PX = 12;
 
 const zoomLabel = document.getElementById("zoomLabel");
 const iterLabel = document.getElementById("iterLabel");
@@ -39,7 +18,9 @@ const resetBtn = document.getElementById("resetBtn");
 const paletteBtn = document.getElementById("paletteBtn");
 const paletteCtlBtn = document.getElementById("paletteCtlBtn");
 const swatch = document.getElementById("swatch");
-const fadeVeil = document.getElementById("fadeVeil");
+const aimEl = document.getElementById("aim");
+const limitNote = document.getElementById("limitNote");
+const hintEl = document.getElementById("hint");
 
 let canvas = document.getElementById("gl");
 
@@ -65,36 +46,31 @@ function createRenderer() {
 }
 
 const renderer = createRenderer();
-const MIN_SCALE = renderer.minScale || 8e-5;
+/** Absolute floor for this device — we stop here, never auto-switch places. */
+const MIN_SCALE = renderer.minScale || (renderer.kind === "canvas2d" ? 1e-14 : 2e-13);
 
 const state = {
-  centerX: DIVE_SITES[0].x,
-  centerY: DIVE_SITES[0].y,
+  centerX: START.x,
+  centerY: START.y,
+  /** Locked dive target (complex plane). Updated on tap. */
+  targetX: START.x,
+  targetY: START.y,
   scale: INITIAL_SCALE,
-  siteIndex: 0,
   auto: true,
-  speedNorm: 0.45,
+  speedNorm: 0.4,
   palette: 0,
-  zoomCarry: 1,
   pointerIds: new Map(),
   pinchStartDist: 0,
   pinchStartScale: 1,
   dragStart: null,
+  tapCandidate: null,
   needsRender: true,
-  /**
-   * fade: null | { phase: 'out'|'in', t: 0..1 }
-   * During fade-out we keep zooming in. On peak black we snap. Then fade-in.
-   */
-  fade: null,
-  relayCount: 0,
+  atLimit: false,
+  aimHideTimer: 0,
 };
 
-function effectiveZoom() {
-  return state.zoomCarry * (INITIAL_SCALE / Math.max(state.scale, 1e-30));
-}
-
 function formatZoom() {
-  const z = effectiveZoom();
+  const z = INITIAL_SCALE / Math.max(state.scale, 1e-30);
   if (z < 1000) return `×${z.toFixed(z < 10 ? 1 : 0)}`;
   if (z < 1e6) return `×${(z / 1e3).toFixed(1)}K`;
   if (z < 1e9) return `×${(z / 1e6).toFixed(1)}M`;
@@ -106,21 +82,20 @@ function formatZoom() {
 function iterationBudget(scale) {
   const zoom = Math.max(1, INITIAL_SCALE / scale);
   if (renderer.kind === "canvas2d") {
-    return Math.min(220, Math.floor(100 + 28 * Math.log2(zoom + 1)));
+    return Math.min(200, Math.floor(90 + 24 * Math.log2(zoom + 1)));
   }
-  // Keep boundaries smooth before we hand off to the next dive
-  return Math.min(720, Math.floor(220 + 48 * Math.log2(zoom + 1)));
+  return Math.min(480, Math.floor(160 + 36 * Math.log2(zoom + 1)));
 }
 
 function zoomRateFromSlider(norm) {
   if (norm <= 0.001) return 0;
   const t = Math.pow(norm, 1.15);
-  return 0.18 + t * 2.6;
+  return 0.12 + t * 2.2;
 }
 
 function formatSpeed(norm) {
   if (norm <= 0.001) return "停止";
-  const mult = zoomRateFromSlider(norm) / zoomRateFromSlider(0.45);
+  const mult = zoomRateFromSlider(norm) / zoomRateFromSlider(0.4);
   return `×${mult.toFixed(1)}`;
 }
 
@@ -134,6 +109,10 @@ function setAuto(on) {
   autoBtn.setAttribute("aria-pressed", on ? "true" : "false");
   autoIcon.textContent = on ? "◈" : "▷";
   autoLabel.textContent = on ? "自動拡大" : "再開";
+  if (on) {
+    state.atLimit = false;
+    limitNote.hidden = true;
+  }
 }
 
 function cyclePalette() {
@@ -148,41 +127,26 @@ function cyclePalette() {
   state.needsRender = true;
 }
 
-function setFadeOpacity(a) {
-  fadeVeil.style.opacity = String(Math.max(0, Math.min(1, a)));
-}
-
-/** Snap to next site in one frame — scale may jump, but we never animate zoom-out. */
-function snapToNextSite() {
-  const prevScale = state.scale;
-  state.zoomCarry *= RELAY_SCALE / Math.max(prevScale, 1e-30);
-  state.siteIndex = (state.siteIndex + 1) % DIVE_SITES.length;
-  const site = DIVE_SITES[state.siteIndex];
-  state.centerX = site.x;
-  state.centerY = site.y;
-  state.scale = RELAY_SCALE;
-  state.relayCount += 1;
-  state.needsRender = true;
-}
-
-function beginFadeRelay() {
-  if (state.fade) return;
-  state.fade = { phase: "out", t: 0 };
+function showAim(clientX, clientY) {
+  aimEl.style.left = `${clientX}px`;
+  aimEl.style.top = `${clientY}px`;
+  aimEl.classList.add("show");
+  state.aimHideTimer = 1.2;
 }
 
 function resetView() {
-  state.siteIndex = 0;
-  state.centerX = DIVE_SITES[0].x;
-  state.centerY = DIVE_SITES[0].y;
+  state.centerX = START.x;
+  state.centerY = START.y;
+  state.targetX = START.x;
+  state.targetY = START.y;
   state.scale = INITIAL_SCALE;
-  state.zoomCarry = 1;
-  state.fade = null;
-  state.relayCount = 0;
-  setFadeOpacity(0);
+  state.atLimit = false;
+  limitNote.hidden = true;
   setAuto(true);
-  if (state.speedNorm <= 0) state.speedNorm = 0.45;
+  if (state.speedNorm <= 0) state.speedNorm = 0.4;
   updateSpeedUI();
   state.needsRender = true;
+  aimEl.classList.remove("show");
 }
 
 function screenToComplex(clientX, clientY) {
@@ -196,19 +160,40 @@ function screenToComplex(clientX, clientY) {
   };
 }
 
-function zoomAt(clientX, clientY, factor) {
-  if (state.fade) return;
-  const before = screenToComplex(clientX, clientY);
-  const next = state.scale * factor;
-  if (next <= MIN_SCALE) {
-    beginFadeRelay();
-    return;
+/** Choose dive location — continuous zoom continues into this point (no teleport jump). */
+function chooseTarget(clientX, clientY) {
+  const p = screenToComplex(clientX, clientY);
+  state.targetX = p.x;
+  state.targetY = p.y;
+  state.atLimit = false;
+  limitNote.hidden = true;
+  showAim(clientX, clientY);
+  if (!state.auto) setAuto(true);
+  if (state.speedNorm <= 0) {
+    state.speedNorm = 0.4;
+    updateSpeedUI();
   }
-  state.scale = Math.min(MAX_SCALE, next);
+  // Softly begin centering on the chosen point while zoom continues
+  state.needsRender = true;
+  if (hintEl) hintEl.style.display = "none";
+}
+
+function zoomAt(clientX, clientY, factor) {
+  const before = screenToComplex(clientX, clientY);
+  const next = Math.min(MAX_SCALE, Math.max(MIN_SCALE, state.scale * factor));
+  state.scale = next;
   const after = screenToComplex(clientX, clientY);
   state.centerX += before.x - after.x;
   state.centerY += before.y - after.y;
+  // Keep target under the same screen point intent when pinching
   state.needsRender = true;
+  if (state.scale <= MIN_SCALE * 1.01) {
+    state.atLimit = true;
+    limitNote.hidden = false;
+  } else {
+    state.atLimit = false;
+    limitNote.hidden = true;
+  }
 }
 
 function pointerDistance() {
@@ -229,11 +214,14 @@ function bindPointer(target) {
           y: e.clientY,
           cx: state.centerX,
           cy: state.centerY,
+          moved: false,
         };
+        state.tapCandidate = { x: e.clientX, y: e.clientY };
       } else if (state.pointerIds.size === 2) {
         state.pinchStartDist = pointerDistance();
         state.pinchStartScale = state.scale;
         state.dragStart = null;
+        state.tapCandidate = null;
       }
     },
     { passive: true }
@@ -252,26 +240,49 @@ function bindPointer(target) {
         const midY = (pts[0].y + pts[1].y) / 2;
         const targetScale = Math.min(
           MAX_SCALE,
-          Math.max(MIN_SCALE * 1.05, state.pinchStartScale * (state.pinchStartDist / Math.max(dist, 1)))
+          Math.max(MIN_SCALE, state.pinchStartScale * (state.pinchStartDist / Math.max(dist, 1)))
         );
         zoomAt(midX, midY, targetScale / state.scale);
+        state.tapCandidate = null;
       } else if (state.dragStart && state.pointerIds.size === 1) {
-        const rect = canvas.getBoundingClientRect();
-        const dx = ((e.clientX - state.dragStart.x) / rect.width) * 2;
-        const dy = -(((e.clientY - state.dragStart.y) / rect.height) * 2);
-        const aspect = canvas.width / Math.max(1, canvas.height);
-        state.centerX = state.dragStart.cx - dx * aspect * state.scale;
-        state.centerY = state.dragStart.cy - dy * state.scale;
-        state.needsRender = true;
+        const dx = e.clientX - state.dragStart.x;
+        const dy = e.clientY - state.dragStart.y;
+        if (Math.hypot(dx, dy) > TAP_SLOP_PX) {
+          state.dragStart.moved = true;
+          state.tapCandidate = null;
+          const rect = canvas.getBoundingClientRect();
+          const ndx = (dx / rect.width) * 2;
+          const ndy = -((dy / rect.height) * 2);
+          const aspect = canvas.width / Math.max(1, canvas.height);
+          state.centerX = state.dragStart.cx - ndx * aspect * state.scale;
+          state.centerY = state.dragStart.cy - ndy * state.scale;
+          // Dragging re-aims to the new view center
+          state.targetX = state.centerX;
+          state.targetY = state.centerY;
+          state.needsRender = true;
+        }
       }
     },
     { passive: true }
   );
 
   const endPointer = (e) => {
+    const wasTap =
+      state.tapCandidate &&
+      state.pointerIds.size === 1 &&
+      state.dragStart &&
+      !state.dragStart.moved &&
+      Math.hypot(e.clientX - state.tapCandidate.x, e.clientY - state.tapCandidate.y) <= TAP_SLOP_PX;
+
     state.pointerIds.delete(e.pointerId);
     if (state.pointerIds.size < 2) state.pinchStartDist = 0;
-    if (state.pointerIds.size === 0) state.dragStart = null;
+    if (state.pointerIds.size === 0) {
+      if (wasTap) {
+        chooseTarget(state.tapCandidate.x, state.tapCandidate.y);
+      }
+      state.dragStart = null;
+      state.tapCandidate = null;
+    }
   };
   target.addEventListener("pointerup", endPointer);
   target.addEventListener("pointercancel", endPointer);
@@ -291,6 +302,10 @@ speedSlider.addEventListener("input", () => {
   state.speedNorm = Number(speedSlider.value) / 100;
   updateSpeedUI();
   if (state.speedNorm > 0 && !state.auto) setAuto(true);
+  if (state.speedNorm > 0) {
+    state.atLimit = false;
+    limitNote.hidden = true;
+  }
 });
 
 autoBtn.addEventListener("click", () => {
@@ -299,7 +314,7 @@ autoBtn.addEventListener("click", () => {
     state.speedNorm = 0;
   } else {
     setAuto(true);
-    if (state.speedNorm <= 0) state.speedNorm = 0.45;
+    if (state.speedNorm <= 0) state.speedNorm = 0.4;
   }
   updateSpeedUI();
 });
@@ -316,20 +331,17 @@ window.addEventListener("resize", () => {
 renderer.resize();
 updateSpeedUI();
 setAuto(true);
-setFadeOpacity(0);
 
-/** Test/debug hook — used by verification script */
 window.__SHINSO__ = {
   getState: () => ({
     scale: state.scale,
-    zoom: effectiveZoom(),
-    siteIndex: state.siteIndex,
-    relayCount: state.relayCount,
+    zoom: INITIAL_SCALE / Math.max(state.scale, 1e-30),
     auto: state.auto,
-    fading: !!state.fade,
-    fadePhase: state.fade?.phase ?? null,
+    atLimit: state.atLimit,
     centerX: state.centerX,
     centerY: state.centerY,
+    targetX: state.targetX,
+    targetY: state.targetY,
     renderer: renderer.kind,
     minScale: MIN_SCALE,
   }),
@@ -338,10 +350,11 @@ window.__SHINSO__ = {
     updateSpeedUI();
     if (state.speedNorm > 0) setAuto(true);
   },
+  chooseTargetAt: (x, y) => chooseTarget(x, y),
   reset: resetView,
 };
 
-console.info("[深層] renderer:", renderer.kind, "minScale:", MIN_SCALE);
+console.info("[深層] renderer:", renderer.kind, "minScale:", MIN_SCALE, "(no auto site switch)");
 
 let lastT = performance.now();
 let hudAcc = 0;
@@ -349,47 +362,41 @@ let hudAcc = 0;
 function diveIn(dt) {
   const rate = zoomRateFromSlider(state.speedNorm);
   if (rate <= 0) return;
+
+  if (state.scale <= MIN_SCALE) {
+    state.scale = MIN_SCALE;
+    state.atLimit = true;
+    limitNote.hidden = false;
+    return;
+  }
+
   state.scale *= Math.exp(-rate * dt);
-  // Very gentle keep-on-target — too strong feels like sliding
-  const site = DIVE_SITES[state.siteIndex];
-  const pull = 1 - Math.exp(-0.12 * dt);
-  state.centerX += (site.x - state.centerX) * pull;
-  state.centerY += (site.y - state.centerY) * pull;
+  if (state.scale < MIN_SCALE) state.scale = MIN_SCALE;
+
+  // Continuously home toward the user-chosen target while zooming in — no jumps
+  const pull = 1 - Math.exp(-1.8 * dt);
+  state.centerX += (state.targetX - state.centerX) * pull;
+  state.centerY += (state.targetY - state.centerY) * pull;
   state.needsRender = true;
+
+  if (state.scale <= MIN_SCALE) {
+    state.atLimit = true;
+    limitNote.hidden = false;
+  }
 }
 
 function tick(now) {
-  const dt = Math.min(0.05, (now - lastT) / 1000);
+  // Wall-clock zoom: SPEED stays honest even if a heavy frame hitches
+  const rawDt = Math.max(0, (now - lastT) / 1000);
+  const dt = Math.min(0.25, rawDt);
   lastT = now;
 
-  if (state.fade) {
-    // Fade timing: ~0.35s out, snap, ~0.45s in
-    const speed = state.fade.phase === "out" ? 2.8 : 2.2;
-    state.fade.t += dt * speed;
-
-    if (state.fade.phase === "out") {
-      // Keep diving while fading to black — motion never reverses
-      if (state.auto) diveIn(dt);
-      setFadeOpacity(Math.min(1, state.fade.t));
-      if (state.fade.t >= 1) {
-        snapToNextSite();
-        state.fade = { phase: "in", t: 0 };
-        setFadeOpacity(1);
-      }
-    } else {
-      setFadeOpacity(1 - Math.min(1, state.fade.t));
-      if (state.auto) diveIn(dt);
-      if (state.fade.t >= 1) {
-        state.fade = null;
-        setFadeOpacity(0);
-      }
-    }
-  } else if (state.auto) {
-    diveIn(dt);
-    if (state.scale <= MIN_SCALE) {
-      beginFadeRelay();
-    }
+  if (state.aimHideTimer > 0) {
+    state.aimHideTimer -= dt;
+    if (state.aimHideTimer <= 0) aimEl.classList.remove("show");
   }
+
+  if (state.auto) diveIn(dt);
 
   if (renderer.resize()) state.needsRender = true;
 
@@ -401,7 +408,7 @@ function tick(now) {
     iterLabel.textContent = String(iters);
   }
 
-  if (state.needsRender || state.auto || state.fade) {
+  if (state.needsRender || state.auto) {
     try {
       renderer.render({
         centerX: state.centerX,

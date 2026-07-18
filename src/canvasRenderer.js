@@ -85,6 +85,7 @@ export function createCanvasRenderer(canvas) {
     resize,
     render,
     canvas,
-    minScale: 5e-5,
+    // Stay sharp; no automatic place switching — user taps a new spot / resets
+    minScale: 1.2e-4,
   };
 }
