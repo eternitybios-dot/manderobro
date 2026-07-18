@@ -1,8 +1,10 @@
 import { createWebGLRenderer } from "./webglRenderer.js";
 import { createCanvasRenderer } from "./canvasRenderer.js";
 
-/** Classic overview — user taps to choose where to dive. No automatic site hops. */
+/** Wide overview of the set. Default dive aims at a colorful boundary. */
 const START = { x: -0.5, y: 0.0 };
+/** Seahorse valley — interesting until the user taps their own aim point. */
+const DEFAULT_TARGET = { x: -0.7436438870371587, y: 0.13182590420531197 };
 const INITIAL_SCALE = 2.2;
 const MAX_SCALE = 3.5;
 const TAP_SLOP_PX = 12;
@@ -53,8 +55,8 @@ const state = {
   centerX: START.x,
   centerY: START.y,
   /** Locked dive target (complex plane). Updated on tap. */
-  targetX: START.x,
-  targetY: START.y,
+  targetX: DEFAULT_TARGET.x,
+  targetY: DEFAULT_TARGET.y,
   scale: INITIAL_SCALE,
   auto: true,
   speedNorm: 0.4,
@@ -137,8 +139,8 @@ function showAim(clientX, clientY) {
 function resetView() {
   state.centerX = START.x;
   state.centerY = START.y;
-  state.targetX = START.x;
-  state.targetY = START.y;
+  state.targetX = DEFAULT_TARGET.x;
+  state.targetY = DEFAULT_TARGET.y;
   state.scale = INITIAL_SCALE;
   state.atLimit = false;
   limitNote.hidden = true;

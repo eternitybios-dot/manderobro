@@ -4,7 +4,7 @@
 
 ## スマホで見る
 
-**https://clear-firefly-aa0y8r7.shipstatic.com**
+**https://reborn-cloud-jo7st39.shipstatic.com**
 
 1. 画面をタップして潜る場所を選ぶ
 2. その地点へ連続で拡大（場所の自動切替なし）
@@ -12,7 +12,7 @@
 
 精度の限界まで行くと止まります。別の場所を見るときは「戻る」かピンチアウトしてから、もう一度タップ。
 
-恒久化（任意）: https://my.shipstatic.com/claim/980458c63545ad44bf1cb39cb8ef96665a42670a998539433f730918af11ab51
+恒久化（任意）: https://my.shipstatic.com/claim/005e54285547edb7e971dc6e02e157c858ae0b0e77d3dc5fdfbb77fc1c4125cd
 
 ## 開発
 
