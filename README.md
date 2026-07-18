@@ -4,11 +4,11 @@
 
 ## スマホで見る
 
-### いちばん簡単（公開 URL）
+スマホのブラウザでこの URL を開く:
 
-GitHub の Settings → Pages で Source を `gh-pages` / `/ (root)` にすると、次の URL で開けます。
+**https://raw.githack.com/eternitybios-dot/manderobro/gh-pages/index.html**
 
-**https://eternitybios-dot.github.io/manderobro/**
+開いたら自動で拡大が始まります。下の SPEED で速さを変えられます。
 
 ### ローカルから同じ Wi-Fi のスマホで見る
 
