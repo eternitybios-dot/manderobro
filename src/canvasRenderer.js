@@ -1,9 +1,10 @@
 /** CPU fallback: one continuous Mandelbrot dive → connected Julia handoff. */
 
-const HANDOFF_LOG = 10.2;
-const HANDOFF_WIDTH = 2.2;
+const HANDOFF_LOG = 9.5;
+const HANDOFF_WIDTH = 2.8;
 const LOG_PERIOD = Math.log(6);
 const BASE_SPAN = 2.6;
+const JULIA_SPAN = 2.35;
 
 function palette(t, mode, time) {
   t = (t + time * 0.018) % 1;
@@ -64,23 +65,25 @@ function layerWeight(phase) {
   return 0.5 - 0.5 * Math.cos(Math.PI * 2 * Math.max(0, Math.min(1, phase)));
 }
 
-function fakeJulia(uvx, uvy, deep, jx, jy, aimX, aimY, maxI, time, paletteMode) {
-  const matchSpan = (BASE_SPAN / Math.exp(HANDOFF_LOG)) * 1.55;
-  const crawlAmp = 0.18 * Math.min(1, Math.max(0, (deep - 0.8) / 2.7));
-  const crawlX =
-    crawlAmp * Math.sin(deep * 0.028 + aimX * 1.1) + aimX * (0.04 * Math.min(1, Math.max(0, (deep - 1) / 3)));
-  const crawlY =
-    crawlAmp * Math.cos(deep * 0.025 + aimY * 1.0) + aimY * (0.04 * Math.min(1, Math.max(0, (deep - 1) / 3)));
+function smoothstep(e0, e1, x) {
+  const t = Math.min(1, Math.max(0, (x - e0) / (e1 - e0)));
+  return t * t * (3 - 2 * t);
+}
 
-  const lf = deep / LOG_PERIOD + 0.28;
+function fakeJulia(uvx, uvy, deep, jx, jy, aimX, aimY, maxI, time, paletteMode) {
+  const crawlAmp = 0.42 * smoothstep(0, 2.5, deep);
+  const focusX = crawlAmp * Math.sin(deep * 0.022 + aimX * 0.9) + aimX * (0.12 * smoothstep(0.5, 3, deep));
+  const focusY = crawlAmp * Math.cos(deep * 0.019 + aimY * 0.85) + aimY * (0.12 * smoothstep(0.5, 3, deep));
+
+  const lf = deep / LOG_PERIOD + 0.3;
   const p0 = lf - Math.floor(lf);
   const p1 = lf - 0.5 - Math.floor(lf - 0.5);
-  const span0 = matchSpan / Math.exp(p0 * LOG_PERIOD);
-  const span1 = matchSpan / Math.exp(p1 * LOG_PERIOD);
+  const span0 = JULIA_SPAN / Math.exp(p0 * LOG_PERIOD);
+  const span1 = JULIA_SPAN / Math.exp(p1 * LOG_PERIOD);
   const w0 = Math.max(layerWeight(p0), 0.001);
   const w1 = Math.max(layerWeight(p1), 0.001);
-  const a = sampleField(uvx, uvy, crawlX, crawlY, span0, 1, jx, jy, maxI, time, paletteMode);
-  const b = sampleField(uvx, uvy, crawlX, crawlY, span1, 1, jx, jy, maxI, time, paletteMode);
+  const a = sampleField(uvx, uvy, focusX, focusY, span0, 1, jx, jy, maxI, time, paletteMode);
+  const b = sampleField(uvx, uvy, focusX, focusY, span1, 1, jx, jy, maxI, time, paletteMode);
   const inv = 1 / (w0 + w1);
   return [(a[0] * w0 + b[0] * w1) * inv, (a[1] * w0 + b[1] * w1) * inv, (a[2] * w0 + b[2] * w1) * inv];
 }
@@ -111,9 +114,10 @@ export function createCanvasRenderer(canvas) {
     const aspect = w / h;
     const lz = Math.max(logZoom, 0);
     const maxI = Math.min(iters, 70);
-    const clampedZoom = Math.exp(Math.min(lz, HANDOFF_LOG + HANDOFF_WIDTH));
-    const realSpan = BASE_SPAN / clampedZoom;
-    const handoff = Math.min(1, Math.max(0, (lz - HANDOFF_LOG) / HANDOFF_WIDTH));
+    const realLog = Math.min(lz, HANDOFF_LOG + HANDOFF_WIDTH * 0.85);
+    const realSpan = BASE_SPAN / Math.exp(realLog);
+    let handoff = smoothstep(HANDOFF_LOG, HANDOFF_LOG + HANDOFF_WIDTH, lz);
+    handoff = handoff * handoff * (3 - 2 * handoff);
     const deep = Math.max(0, lz - HANDOFF_LOG);
 
     for (let y = 0; y < h; y++) {

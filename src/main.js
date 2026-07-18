@@ -311,6 +311,8 @@ window.__SHINSO__ = {
     logZoom: state.logZoom,
     zoom: effectiveZoom(),
     auto: state.auto,
+    speedNorm: state.speedNorm,
+    zoomRate: zoomRateFromSlider(state.speedNorm),
     centerX: state.centerX,
     centerY: state.centerY,
     aimX: state.aimX,
@@ -319,7 +321,7 @@ window.__SHINSO__ = {
     infinite: true,
   }),
   setSpeed: (n) => {
-    state.speedNorm = Math.max(0, Math.min(1, n));
+    state.speedNorm = Math.max(0, Math.min(1, Number(n) || 0));
     updateSpeedUI();
     if (state.speedNorm > 0) setAuto(true);
   },
@@ -333,8 +335,12 @@ let lastT = performance.now();
 let hudAcc = 0;
 
 function tick(now) {
-  const dt = Math.min(0.1, Math.max(0, (now - lastT) / 1000));
+  const rawDt = Math.max(0, (now - lastT) / 1000);
   lastT = now;
+  // UI timers stay capped; zoom uses real elapsed time so slow rAF
+  // (headless / background tabs) does not stall the dive.
+  const dt = Math.min(0.1, rawDt);
+  const zoomDt = Math.min(1, rawDt);
 
   if (state.aimHideTimer > 0) {
     state.aimHideTimer -= dt;
@@ -344,7 +350,7 @@ function tick(now) {
   if (state.auto) {
     const rate = zoomRateFromSlider(state.speedNorm);
     if (rate > 0) {
-      state.logZoom += rate * dt;
+      state.logZoom += rate * zoomDt;
       state.needsRender = true;
     }
   }

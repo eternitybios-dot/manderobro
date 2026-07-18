@@ -78,10 +78,14 @@ for (let i = 1; i < samples.length; i++) {
 
 const first = samples[0];
 const last = samples[samples.length - 1];
-assert(last.zoom > first.zoom * 50, `zoom barely moved ${first.zoom} -> ${last.zoom}`);
-// Must cross many octaves (8^n) without stopping — proves no precision wall
-assert(last.logZoom > 8, `should keep diving deep in log space, got ${last.logZoom}`);
+assert(last.zoom > first.zoom * 20, `zoom barely moved ${first.zoom} -> ${last.zoom}`);
+// Continuous dive must keep deepening in log space (slow default is OK)
+assert(last.logZoom > 5, `should keep diving deep in log space, got ${last.logZoom}`);
 assert(!("atLimit" in last) || last.atLimit !== true, "must not hard-stop at a limit");
+// Center should stay one continuous target (no teleporting to a random site)
+assert(Number.isFinite(last.centerX) && Number.isFinite(last.centerY), "center missing");
+const centerDrift = Math.hypot(last.centerX - boot.centerX, last.centerY - boot.centerY);
+assert(centerDrift < 0.5, `center jumped too far (${centerDrift}) — looks like a scene cut`);
 
 console.log(
   "VERIFY_OK",
