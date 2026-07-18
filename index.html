@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no"
+    />
+    <meta name="theme-color" content="#041015" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta
+      name="description"
+      content="マンデルブロ集合を永遠に自動拡大できる、見てて楽しいスマホ向けフラクタル探索アプリ"
+    />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <title>深層 — Infinite Mandelbrot</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <div id="app">
+      <canvas id="gl" aria-label="マンデルブロ集合"></canvas>
+
+      <div class="vignette" aria-hidden="true"></div>
+      <div class="grain" aria-hidden="true"></div>
+
+      <header class="top">
+        <div class="brand">
+          <p class="brand-mark">深層</p>
+          <p class="brand-sub">SHINSO · MANDELBROT</p>
+        </div>
+        <button type="button" class="icon-btn" id="paletteBtn" aria-label="配色を変える" title="配色">
+          <span class="swatch" id="swatch"></span>
+        </button>
+      </header>
+
+      <div class="hud">
+        <div class="meter">
+          <span class="meter-label">ZOOM</span>
+          <span class="meter-value" id="zoomLabel">×1</span>
+        </div>
+        <div class="meter">
+          <span class="meter-label">DEPTH</span>
+          <span class="meter-value" id="iterLabel">200</span>
+        </div>
+      </div>
+
+      <div class="hint" id="hint">
+        <p>自動で永遠に拡大していきます</p>
+        <p class="hint-sub">下の SPEED で速さを自由に変えられます</p>
+      </div>
+
+      <footer class="dock">
+        <section class="speed-panel" aria-label="拡大スピード">
+          <div class="speed-head">
+            <p class="speed-title">SPEED</p>
+            <p class="speed-value" id="speedLabel">×1.0</p>
+          </div>
+          <input
+            type="range"
+            class="speed-slider"
+            id="speedSlider"
+            min="0"
+            max="100"
+            value="35"
+            step="1"
+            aria-label="拡大スピード"
+          />
+          <div class="speed-marks">
+            <span>停止</span>
+            <span>ゆっくり</span>
+            <span>最速</span>
+          </div>
+        </section>
+
+        <div class="controls">
+          <button type="button" class="ctl" id="resetBtn" aria-label="最初に戻る">
+            <span class="ctl-icon">↺</span>
+            <span class="ctl-label">戻る</span>
+          </button>
+          <button type="button" class="ctl ctl-primary" id="autoBtn" aria-pressed="true">
+            <span class="ctl-icon" id="autoIcon">◈</span>
+            <span class="ctl-label" id="autoLabel">自動拡大</span>
+          </button>
+          <button type="button" class="ctl" id="paletteCtlBtn" aria-label="配色を変える">
+            <span class="ctl-icon">◐</span>
+            <span class="ctl-label">配色</span>
+          </button>
+        </div>
+      </footer>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
