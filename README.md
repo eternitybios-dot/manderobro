@@ -4,22 +4,20 @@
 
 ## スマホで見る
 
-**https://reborn-cloud-jo7st39.shipstatic.com**
+**https://hyper-fog-p8ifp51.shipstatic.com**
 
-1. 画面をタップして潜る場所を選ぶ
-2. その地点へ連続で拡大（場所の自動切替なし）
-3. SPEED で速さ変更 / ドラッグで移動 / ピンチで拡大縮小
+- タップで潜る場所を選ぶ
+- 浅い層は高速描画、深くなったら高精度計算に自動切替（場所は変わらない）
+- 以前の「すぐに限界」より、はるかに深くまで連続で潜れます
 
-精度の限界まで行くと止まります。別の場所を見るときは「戻る」かピンチアウトしてから、もう一度タップ。
+精度の最終限界まで行くと止まります。別の場所は「戻る」か再タップ。
 
-恒久化（任意）: https://my.shipstatic.com/claim/005e54285547edb7e971dc6e02e157c858ae0b0e77d3dc5fdfbb77fc1c4125cd
+恒久化（任意）: https://my.shipstatic.com/claim/5af0aaabffa3810cc6afb0ce18e3b5bdc4d6dd8f64345b3d70128fbfa5b5e09f
 
 ## 開発
 
 ```bash
-npm install
-npm run build
-npm run preview
+npm install && npm run build && npm run preview
 APP_URL=http://127.0.0.1:4173/ npm run verify:motion
 npm run deploy
 ```

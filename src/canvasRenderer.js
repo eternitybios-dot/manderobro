@@ -85,7 +85,7 @@ export function createCanvasRenderer(canvas) {
     resize,
     render,
     canvas,
-    // Stay sharp; no automatic place switching — user taps a new spot / resets
-    minScale: 1.2e-4,
+    // JS float64 can go much deeper on the CPU path
+    minScale: 1e-14,
   };
 }

@@ -72,7 +72,7 @@ console.log("aimed", { tx: aimed.targetX, ty: aimed.targetY, cx: aimed.centerX, 
 assert(Number.isFinite(aimed.targetX) && Number.isFinite(aimed.targetY), "target finite");
 
 const samples = [];
-const durationMs = 10000;
+const durationMs = 14000;
 const stepMs = 200;
 const t0 = Date.now();
 while (Date.now() - t0 < durationMs) {
@@ -101,6 +101,13 @@ const first = samples[0];
 const last = samples[samples.length - 1];
 assert(last.zoom > first.zoom * 30, `zoom barely moved ${first.zoom} -> ${last.zoom}`);
 
+// If deep path exists, we should cross the old float32 mosaic zone continuously
+if (boot.hasDeep !== false && last.renderer !== "canvas2d") {
+  const crossedDeep = samples.some((s) => s.deep || s.scale < 2.5e-4);
+  assert(crossedDeep, "expected to enter deep-precision continuous zoom");
+  assert(last.scale < 1e-4 || last.atLimit, "should dive past shallow float limit");
+}
+
 // Center should have moved toward the chosen target over time
 const early = samples[3];
 const late = samples[samples.length - 1];
@@ -112,10 +119,14 @@ console.log(
   "VERIFY_OK",
   "renderer=",
   boot.renderer,
+  "hasDeep=",
+  boot.hasDeep,
   "zoom",
   first.zoom.toFixed(1),
   "->",
   last.zoom.toExponential(2),
+  "scale=",
+  last.scale.toExponential(2),
   "atLimit=",
   last.atLimit
 );

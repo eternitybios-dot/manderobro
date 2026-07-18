@@ -48,8 +48,9 @@ function createRenderer() {
 }
 
 const renderer = createRenderer();
-/** Absolute floor for this device — we stop here, never auto-switch places. */
-const MIN_SCALE = renderer.minScale || (renderer.kind === "canvas2d" ? 1e-14 : 2e-13);
+/** Absolute floor — stop here only; never auto-switch places. */
+const MIN_SCALE = renderer.minScale || (renderer.kind === "canvas2d" ? 1e-14 : 3e-13);
+const DEEP_SCALE = renderer.deepScale || 2.5e-4;
 
 const state = {
   centerX: START.x,
@@ -84,7 +85,11 @@ function formatZoom() {
 function iterationBudget(scale) {
   const zoom = Math.max(1, INITIAL_SCALE / scale);
   if (renderer.kind === "canvas2d") {
-    return Math.min(200, Math.floor(90 + 24 * Math.log2(zoom + 1)));
+    return Math.min(220, Math.floor(90 + 26 * Math.log2(zoom + 1)));
+  }
+  // Deep double-float is heavier — keep iters modest so phones stay smooth
+  if (scale < DEEP_SCALE) {
+    return Math.min(360, Math.floor(140 + 28 * Math.log2(zoom + 1)));
   }
   return Math.min(480, Math.floor(160 + 36 * Math.log2(zoom + 1)));
 }
@@ -340,12 +345,14 @@ window.__SHINSO__ = {
     zoom: INITIAL_SCALE / Math.max(state.scale, 1e-30),
     auto: state.auto,
     atLimit: state.atLimit,
+    deep: state.scale < DEEP_SCALE,
     centerX: state.centerX,
     centerY: state.centerY,
     targetX: state.targetX,
     targetY: state.targetY,
     renderer: renderer.kind,
     minScale: MIN_SCALE,
+    hasDeep: !!renderer.hasDeep,
   }),
   setSpeed: (n) => {
     state.speedNorm = Math.max(0, Math.min(1, n));
@@ -356,7 +363,15 @@ window.__SHINSO__ = {
   reset: resetView,
 };
 
-console.info("[深層] renderer:", renderer.kind, "minScale:", MIN_SCALE, "(no auto site switch)");
+console.info(
+  "[深層] renderer:",
+  renderer.kind,
+  "hasDeep:",
+  !!renderer.hasDeep,
+  "minScale:",
+  MIN_SCALE,
+  "(continuous, no site hop)"
+);
 
 let lastT = performance.now();
 let hudAcc = 0;

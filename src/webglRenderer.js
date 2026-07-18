@@ -1,4 +1,19 @@
-import { VERT_WEBGL1, FRAG_WEBGL1, VERT_WEBGL2, FRAG_WEBGL2 } from "./shaders.js";
+import {
+  VERT_WEBGL1,
+  VERT_WEBGL2,
+  FRAG_WEBGL1_FAST,
+  FRAG_WEBGL1_DEEP,
+  FRAG_WEBGL2_FAST,
+  FRAG_WEBGL2_DEEP,
+} from "./shaders.js";
+
+/** Below this scale, switch to double-float (same place — no visual hop). */
+const DEEP_SCALE = 2.5e-4;
+
+function splitDouble(x) {
+  const hi = Math.fround(x);
+  return [hi, x - hi];
+}
 
 function createShader(gl, type, source) {
   const shader = gl.createShader(type);
@@ -54,32 +69,55 @@ function bindQuad(gl, program, isWebGL2) {
   };
 }
 
-function probePrecision(gl) {
+function probe(gl) {
   const fmt = gl.getShaderPrecisionFormat(gl.FRAGMENT_SHADER, gl.HIGH_FLOAT);
-  const okHighp = fmt && fmt.precision >= 23;
+  const highp = !!(fmt && fmt.precision >= 23);
   return {
-    highp: !!okHighp,
-    // Stop before mosaic — never auto-hop to another landmark
-    minScale: okHighp ? 1.5e-4 : 4e-4,
+    highp,
+    // With double-float we can keep going much deeper in the same spot
+    minScale: highp ? 3e-13 : 8e-7,
   };
 }
 
-function buildRenderer(canvas, gl, kind, vert, frag, isWebGL2) {
-  const program = createProgram(gl, vert, frag);
-  const bind = bindQuad(gl, program, isWebGL2);
-  const precision = probePrecision(gl);
-  const uniforms = {
-    res: gl.getUniformLocation(program, "u_res"),
-    center: gl.getUniformLocation(program, "u_center"),
-    scale: gl.getUniformLocation(program, "u_scale"),
-    iters: gl.getUniformLocation(program, "u_iters"),
-    time: gl.getUniformLocation(program, "u_time"),
-    palette: gl.getUniformLocation(program, "u_palette"),
-    aspect: gl.getUniformLocation(program, "u_aspect"),
+function buildRenderer(canvas, gl, kind, vert, fragFast, fragDeep, isWebGL2) {
+  const fastProg = createProgram(gl, vert, fragFast);
+  let deepProg = null;
+  try {
+    deepProg = createProgram(gl, vert, fragDeep);
+  } catch (err) {
+    console.warn("Deep double-float shader unavailable, using fast only:", err);
+  }
+
+  const bindFast = bindQuad(gl, fastProg, isWebGL2);
+  const bindDeep = deepProg ? bindQuad(gl, deepProg, isWebGL2) : null;
+  const precision = probe(gl);
+
+  const fastU = {
+    res: gl.getUniformLocation(fastProg, "u_res"),
+    center: gl.getUniformLocation(fastProg, "u_center"),
+    scale: gl.getUniformLocation(fastProg, "u_scale"),
+    iters: gl.getUniformLocation(fastProg, "u_iters"),
+    time: gl.getUniformLocation(fastProg, "u_time"),
+    palette: gl.getUniformLocation(fastProg, "u_palette"),
+    aspect: gl.getUniformLocation(fastProg, "u_aspect"),
   };
 
-  function resize() {
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const deepU = deepProg
+    ? {
+        res: gl.getUniformLocation(deepProg, "u_res"),
+        centerHi: gl.getUniformLocation(deepProg, "u_center_hi"),
+        centerLo: gl.getUniformLocation(deepProg, "u_center_lo"),
+        scale: gl.getUniformLocation(deepProg, "u_scale"),
+        iters: gl.getUniformLocation(deepProg, "u_iters"),
+        time: gl.getUniformLocation(deepProg, "u_time"),
+        palette: gl.getUniformLocation(deepProg, "u_palette"),
+        aspect: gl.getUniformLocation(deepProg, "u_aspect"),
+      }
+    : null;
+
+  function resize(deepMode) {
+    const dprCap = deepMode ? 1.35 : 2;
+    const dpr = Math.min(window.devicePixelRatio || 1, dprCap);
     const w = Math.max(1, Math.floor(window.innerWidth * dpr));
     const h = Math.max(1, Math.floor(window.innerHeight * dpr));
     if (canvas.width !== w || canvas.height !== h) {
@@ -92,36 +130,56 @@ function buildRenderer(canvas, gl, kind, vert, frag, isWebGL2) {
   }
 
   function render({ centerX, centerY, scale, iters, time, palette }) {
-    resize();
-    gl.useProgram(program);
-    bind();
-    gl.uniform2f(uniforms.res, canvas.width, canvas.height);
-    gl.uniform2f(uniforms.center, centerX, centerY);
-    gl.uniform1f(uniforms.scale, scale);
-    gl.uniform1f(uniforms.iters, iters);
-    gl.uniform1f(uniforms.time, time);
-    gl.uniform1f(uniforms.palette, palette);
-    gl.uniform1f(uniforms.aspect, canvas.width / Math.max(1, canvas.height));
+    const useDeep = !!(deepProg && scale < DEEP_SCALE);
+    resize(useDeep);
+    const aspect = canvas.width / Math.max(1, canvas.height);
+
+    if (useDeep) {
+      const [cxHi, cxLo] = splitDouble(centerX);
+      const [cyHi, cyLo] = splitDouble(centerY);
+      gl.useProgram(deepProg);
+      bindDeep();
+      gl.uniform2f(deepU.res, canvas.width, canvas.height);
+      gl.uniform2f(deepU.centerHi, cxHi, cyHi);
+      gl.uniform2f(deepU.centerLo, cxLo, cyLo);
+      gl.uniform1f(deepU.scale, scale);
+      gl.uniform1f(deepU.iters, iters);
+      gl.uniform1f(deepU.time, time);
+      gl.uniform1f(deepU.palette, palette);
+      gl.uniform1f(deepU.aspect, aspect);
+    } else {
+      gl.useProgram(fastProg);
+      bindFast();
+      gl.uniform2f(fastU.res, canvas.width, canvas.height);
+      gl.uniform2f(fastU.center, centerX, centerY);
+      gl.uniform1f(fastU.scale, scale);
+      gl.uniform1f(fastU.iters, iters);
+      gl.uniform1f(fastU.time, time);
+      gl.uniform1f(fastU.palette, palette);
+      gl.uniform1f(fastU.aspect, aspect);
+    }
     gl.drawArrays(gl.TRIANGLES, 0, 6);
   }
 
-  resize();
+  resize(false);
   render({
     centerX: -0.5,
     centerY: 0,
     scale: 2.2,
-    iters: 160,
+    iters: 140,
     time: 0,
     palette: 0,
   });
 
   return {
     kind,
-    resize,
+    resize: () => resize(false),
     render,
     canvas,
-    minScale: precision.minScale,
+    minScale: deepProg ? precision.minScale : precision.highp ? 1.5e-4 : 4e-4,
     highp: precision.highp,
+    hasDeep: !!deepProg,
+    deepScale: DEEP_SCALE,
   };
 }
 
@@ -146,7 +204,15 @@ export function createWebGLRenderer(canvas) {
     });
     if (gl2) {
       poisoned = true;
-      return buildRenderer(canvas, gl2, "webgl2", VERT_WEBGL2, FRAG_WEBGL2, true);
+      return buildRenderer(
+        canvas,
+        gl2,
+        "webgl2",
+        VERT_WEBGL2,
+        FRAG_WEBGL2_FAST,
+        FRAG_WEBGL2_DEEP,
+        true
+      );
     }
   } catch (err) {
     console.warn("WebGL2 Mandelbrot failed:", err);
@@ -162,13 +228,18 @@ export function createWebGLRenderer(canvas) {
         alpha: false,
         preserveDrawingBuffer: false,
       }) ||
-      target.getContext("experimental-webgl", {
-        antialias: false,
-        alpha: false,
-      });
+      target.getContext("experimental-webgl", { antialias: false, alpha: false });
 
     if (gl1) {
-      return buildRenderer(target, gl1, "webgl1", VERT_WEBGL1, FRAG_WEBGL1, false);
+      return buildRenderer(
+        target,
+        gl1,
+        "webgl1",
+        VERT_WEBGL1,
+        FRAG_WEBGL1_FAST,
+        FRAG_WEBGL1_DEEP,
+        false
+      );
     }
   } catch (err) {
     console.warn("WebGL1 Mandelbrot failed:", err);
