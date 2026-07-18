@@ -6,14 +6,14 @@
 
 ## スマホで見る
 
-**https://atomic-nova-n8lh9hc.shipstatic.com**
+**https://obscured-void-84xcmuq.shipstatic.com**
 
 - タップで潜る方向を選ぶ
 - ドラッグで視点をずらす / ピンチで拡大縮小
 - SPEED で速さ変更
 - 永遠に拡大し続けます（ピクセル崩れで止まりません）
 
-恒久化（任意）: https://my.shipstatic.com/claim/6a5c358a0b228c9f803e1c962dd59d99b4d3f1d20b6a647d03466667ea4e02b9
+恒久化（任意）: https://my.shipstatic.com/claim/259183c872df359f6df8451ca4f97f1eab933b39ce5cf4f8d7cae7da8222a90e
 
 ## 開発
 
