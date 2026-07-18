@@ -4,11 +4,11 @@
 
 ## スマホで見る
 
-スマホのブラウザでこの URL を開く:
+スマホのブラウザでこの URL を開く（最新版）:
 
-**https://raw.githack.com/eternitybios-dot/manderobro/gh-pages/index.html**
+**https://raw.githack.com/eternitybios-dot/manderobro/77a76d1/index.html**
 
-開いたら自動で拡大が始まります。下の SPEED で速さを変えられます。
+開いたら自動で拡大が始まり、精度の限界を越えても次の深みへ継ぎ足して永遠に潜り続けます。SPEED で速さを変えられます。
 
 ### ローカルから同じ Wi-Fi のスマホで見る
 
