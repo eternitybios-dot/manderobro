@@ -2,12 +2,15 @@ import { createWebGLRenderer } from "./webglRenderer.js";
 import { createCanvasRenderer } from "./canvasRenderer.js";
 
 /**
- * Fake infinite dive: logZoom grows forever.
- * The shader renormalizes every octave so floats never get tiny —
- * looks like seamless Mandelbrot zoom with no precision death.
+ * One continuous dive into a single Mandelbrot view.
+ * Before float precision dies, the shader hands off to a connected Julia
+ * continuation of the same center — never a random scene cut.
  */
 
 const TAP_SLOP_PX = 12;
+const BASE_SPAN = 2.6;
+const DEFAULT_CENTER = { x: -0.743643887037151, y: 0.131825904205330 };
+const DEFAULT_SPEED = 0.28;
 
 const zoomLabel = document.getElementById("zoomLabel");
 const iterLabel = document.getElementById("iterLabel");
@@ -51,11 +54,13 @@ function createRenderer() {
 const renderer = createRenderer();
 
 const state = {
-  logZoom: 0,
-  aimX: 0.15,
-  aimY: 0.35,
+  logZoom: 0.8,
+  centerX: DEFAULT_CENTER.x,
+  centerY: DEFAULT_CENTER.y,
+  aimX: 0.1,
+  aimY: 0.2,
   auto: true,
-  speedNorm: 0.4,
+  speedNorm: DEFAULT_SPEED,
   palette: 0,
   pointerIds: new Map(),
   pinchStartDist: 0,
@@ -70,6 +75,10 @@ function effectiveZoom() {
   return Math.exp(state.logZoom);
 }
 
+function currentSpan() {
+  return BASE_SPAN / effectiveZoom();
+}
+
 function formatZoom() {
   const z = effectiveZoom();
   if (z < 1000) return `×${z.toFixed(z < 10 ? 1 : 0)}`;
@@ -81,24 +90,24 @@ function formatZoom() {
 }
 
 function iterationBudget() {
-  // Mildly rise with depth for richer edges, but stay realtime
-  const octave = state.logZoom / Math.log(8);
+  const depth = state.logZoom;
   if (renderer.kind === "canvas2d") {
-    return Math.min(100, Math.floor(70 + octave * 2));
+    return Math.min(90, Math.floor(60 + depth * 2));
   }
-  return Math.min(180, Math.floor(110 + octave * 3));
+  return Math.min(200, Math.floor(100 + depth * 4));
 }
 
+/** Slow by default — fake continuation needs time to read as continuous. */
 function zoomRateFromSlider(norm) {
   if (norm <= 0.001) return 0;
-  // logZoom per second
-  const t = Math.pow(norm, 1.1);
-  return 0.35 + t * 2.4;
+  const t = Math.pow(norm, 1.15);
+  // logZoom / sec — default ~0.18, max ~0.85 (verify still reaches deep)
+  return 0.05 + t * 0.8;
 }
 
 function formatSpeed(norm) {
   if (norm <= 0.001) return "停止";
-  const mult = zoomRateFromSlider(norm) / zoomRateFromSlider(0.4);
+  const mult = zoomRateFromSlider(norm) / zoomRateFromSlider(DEFAULT_SPEED);
   return `×${mult.toFixed(1)}`;
 }
 
@@ -134,29 +143,37 @@ function showAim(clientX, clientY) {
 }
 
 function resetView() {
-  state.logZoom = 0;
-  state.aimX = 0.15;
-  state.aimY = 0.35;
+  state.logZoom = 0.8;
+  state.centerX = DEFAULT_CENTER.x;
+  state.centerY = DEFAULT_CENTER.y;
+  state.aimX = 0.1;
+  state.aimY = 0.2;
   setAuto(true);
-  if (state.speedNorm <= 0) state.speedNorm = 0.4;
+  if (state.speedNorm <= 0) state.speedNorm = DEFAULT_SPEED;
   updateSpeedUI();
   state.needsRender = true;
   aimEl.classList.remove("show");
   if (hintEl) hintEl.style.display = "";
 }
 
-/** Map screen tap to aim in [-1,1]-ish space (steers which fake region we dive). */
+/** Tap steers the single continuous dive toward that screen point. */
 function chooseTarget(clientX, clientY) {
   const rect = canvas.getBoundingClientRect();
   const nx = ((clientX - rect.left) / rect.width) * 2 - 1;
   const ny = -(((clientY - rect.top) / rect.height) * 2 - 1);
-  // Blend toward tap so successive taps steer the dive
-  state.aimX = Math.max(-1.2, Math.min(1.2, state.aimX * 0.35 + nx * 0.85));
-  state.aimY = Math.max(-1.2, Math.min(1.2, state.aimY * 0.35 + ny * 0.85));
+  const aspect = rect.width / Math.max(1, rect.height);
+  const span = currentSpan();
+
+  // Move the one center toward the tapped complex point (no scene switch).
+  state.centerX += nx * aspect * span * 0.42;
+  state.centerY += ny * span * 0.42;
+  state.aimX = Math.max(-1, Math.min(1, nx));
+  state.aimY = Math.max(-1, Math.min(1, ny));
+
   showAim(clientX, clientY);
   if (!state.auto) setAuto(true);
   if (state.speedNorm <= 0) {
-    state.speedNorm = 0.4;
+    state.speedNorm = DEFAULT_SPEED;
     updateSpeedUI();
   }
   state.needsRender = true;
@@ -179,6 +196,8 @@ function bindPointer(target) {
         state.dragStart = {
           x: e.clientX,
           y: e.clientY,
+          centerX: state.centerX,
+          centerY: state.centerY,
           aimX: state.aimX,
           aimY: state.aimY,
           moved: false,
@@ -202,7 +221,6 @@ function bindPointer(target) {
 
       if (state.pointerIds.size === 2 && state.pinchStartDist > 0) {
         const dist = pointerDistance();
-        // Pinch in (smaller distance) → dive deeper
         const factor = state.pinchStartDist / Math.max(dist, 1);
         state.logZoom = Math.max(0, state.pinchStartLogZoom + Math.log(Math.max(factor, 1e-3)));
         state.needsRender = true;
@@ -214,10 +232,12 @@ function bindPointer(target) {
           state.dragStart.moved = true;
           state.tapCandidate = null;
           const rect = canvas.getBoundingClientRect();
-          state.aimX = state.dragStart.aimX - (dx / rect.width) * 1.4;
-          state.aimY = state.dragStart.aimY + (dy / rect.height) * 1.4;
-          state.aimX = Math.max(-1.5, Math.min(1.5, state.aimX));
-          state.aimY = Math.max(-1.5, Math.min(1.5, state.aimY));
+          const span = currentSpan();
+          const aspect = rect.width / Math.max(1, rect.height);
+          state.centerX = state.dragStart.centerX - (dx / rect.width) * 2 * aspect * span;
+          state.centerY = state.dragStart.centerY + (dy / rect.height) * 2 * span;
+          state.aimX = Math.max(-1, Math.min(1, state.dragStart.aimX - (dx / rect.width) * 1.2));
+          state.aimY = Math.max(-1, Math.min(1, state.dragStart.aimY + (dy / rect.height) * 1.2));
           state.needsRender = true;
         }
       }
@@ -247,7 +267,7 @@ function bindPointer(target) {
     "wheel",
     (e) => {
       e.preventDefault();
-      state.logZoom = Math.max(0, state.logZoom - e.deltaY * 0.0015);
+      state.logZoom = Math.max(0, state.logZoom - e.deltaY * 0.0012);
       state.needsRender = true;
     },
     { passive: false }
@@ -268,7 +288,7 @@ autoBtn.addEventListener("click", () => {
     state.speedNorm = 0;
   } else {
     setAuto(true);
-    if (state.speedNorm <= 0) state.speedNorm = 0.4;
+    if (state.speedNorm <= 0) state.speedNorm = DEFAULT_SPEED;
   }
   updateSpeedUI();
 });
@@ -291,6 +311,8 @@ window.__SHINSO__ = {
     logZoom: state.logZoom,
     zoom: effectiveZoom(),
     auto: state.auto,
+    centerX: state.centerX,
+    centerY: state.centerY,
     aimX: state.aimX,
     aimY: state.aimY,
     renderer: renderer.kind,
@@ -305,7 +327,7 @@ window.__SHINSO__ = {
   reset: resetView,
 };
 
-console.info("[深層] fake-infinite renderer:", renderer.kind);
+console.info("[深層] continuous-dive renderer:", renderer.kind);
 
 let lastT = performance.now();
 let hudAcc = 0;
@@ -323,9 +345,6 @@ function tick(now) {
     const rate = zoomRateFromSlider(state.speedNorm);
     if (rate > 0) {
       state.logZoom += rate * dt;
-      // Gentle aim drift so filaments keep evolving even without taps
-      state.aimX += Math.sin(now * 0.00007 + state.logZoom * 0.02) * 0.02 * dt;
-      state.aimY += Math.cos(now * 0.00005 + state.logZoom * 0.017) * 0.02 * dt;
       state.needsRender = true;
     }
   }
@@ -344,6 +363,8 @@ function tick(now) {
     try {
       renderer.render({
         logZoom: state.logZoom,
+        centerX: state.centerX,
+        centerY: state.centerY,
         aimX: state.aimX,
         aimY: state.aimY,
         iters,

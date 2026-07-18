@@ -1,13 +1,12 @@
-/** CPU fallback of the fake infinite fractal zoom (phase-offset layers). */
+/** CPU fallback: one continuous Mandelbrot dive → connected Julia handoff. */
 
-function hash21(n) {
-  const x = Math.sin(n) * 43758.5453;
-  const y = Math.sin(n * 1.6180339887) * 22578.1459;
-  return [x - Math.floor(x), y - Math.floor(y)];
-}
+const HANDOFF_LOG = 10.2;
+const HANDOFF_WIDTH = 2.2;
+const LOG_PERIOD = Math.log(6);
+const BASE_SPAN = 2.6;
 
 function palette(t, mode, time) {
-  t = (t + time * 0.025) % 1;
+  t = (t + time * 0.018) % 1;
   if (t < 0) t += 1;
   if (mode < 0.5) {
     return [
@@ -23,11 +22,9 @@ function palette(t, mode, time) {
   ];
 }
 
-function escape(cx, cy, maxI, juliaMix, jx, jy) {
-  let zx = juliaMix * cx * 0.28;
-  let zy = juliaMix * cy * 0.28;
-  const kx = cx * (1 - juliaMix * 0.82) + jx * juliaMix * 0.82;
-  const ky = cy * (1 - juliaMix * 0.82) + jy * juliaMix * 0.82;
+function escape(z0x, z0y, kx, ky, maxI) {
+  let zx = z0x;
+  let zy = z0y;
   let i = 0;
   for (; i < maxI; i++) {
     const zx2 = zx * zx;
@@ -42,41 +39,10 @@ function escape(cx, cy, maxI, juliaMix, jx, jy) {
   return i - Math.log2(Math.log2(Math.max(mag, 1.0001))) + 4;
 }
 
-function regionCenter(octave, aimX, aimY) {
-  const h = hash21(octave + 11);
-  const h2 = hash21(octave * 3.7 + 2);
-  const pick = Math.floor(h[0] * 4);
-  const sites = [
-    [-0.75, 0.12],
-    [-0.16, 1.04],
-    [-1.25, 0.02],
-    [0.28, -0.01],
-  ];
-  const base = sites[pick] || sites[0];
-  return [
-    base[0] + (h2[0] - 0.5) * 0.22 + aimX * (0.14 + 0.18 * h[1]),
-    base[1] + (h2[1] - 0.5) * 0.28 + aimY * (0.14 + 0.18 * h[1]),
-  ];
-}
-
-function layerColor(uvx, uvy, octave, localZoom, aimX, aimY, maxI, time, paletteMode) {
-  const [cx0, cy0] = regionCenter(octave, aimX, aimY);
-  const h = hash21(octave + 5);
-  const juliaMix = 0.08 + 0.22 * h[0];
-  const jx = -0.42 + (h[0] - 0.5) * 0.95 + aimX * 0.1;
-  const jy = 0.63 + (h[1] - 0.5) * 0.95 + aimY * 0.1;
-  const scale = 1.75 / Math.max(localZoom, 1);
-  const ang = (h[1] - 0.5) * 1.2 + octave * 0.37;
-  const ca = Math.cos(ang);
-  const sa = Math.sin(ang);
-  const rx = ca * uvx - sa * uvy;
-  const ry = sa * uvx + ca * uvy;
-  const cx = cx0 + rx * scale;
-  const cy = cy0 + ry * scale;
-  const s = escape(cx, cy, maxI, juliaMix, jx, jy);
-  if (s < 0) return [3, 5, 8];
-  const [r, g, b] = palette(s * 0.018 + octave * 0.07, paletteMode, time);
-  const glow = Math.exp(-0.012 * s) * 0.18;
+function colorize(s, time, paletteMode) {
+  if (s < 0) return [3, 4, 6];
+  const [r, g, b] = palette(s * 0.017, paletteMode, time);
+  const glow = Math.exp(-0.012 * s) * 0.16;
   return [
     Math.min(255, r + glow * 90),
     Math.min(255, g + glow * 240),
@@ -84,11 +50,40 @@ function layerColor(uvx, uvy, octave, localZoom, aimX, aimY, maxI, time, palette
   ];
 }
 
+function sampleField(uvx, uvy, centerX, centerY, span, juliaMix, jx, jy, maxI, time, paletteMode) {
+  const cx = centerX + uvx * span;
+  const cy = centerY + uvy * span;
+  const z0x = juliaMix * cx;
+  const z0y = juliaMix * cy;
+  const kx = cx * (1 - juliaMix) + jx * juliaMix;
+  const ky = cy * (1 - juliaMix) + jy * juliaMix;
+  return colorize(escape(z0x, z0y, kx, ky, maxI), time, paletteMode);
+}
+
 function layerWeight(phase) {
   return 0.5 - 0.5 * Math.cos(Math.PI * 2 * Math.max(0, Math.min(1, phase)));
 }
 
-const LOG_OCTAVE = Math.log(8);
+function fakeJulia(uvx, uvy, deep, jx, jy, aimX, aimY, maxI, time, paletteMode) {
+  const matchSpan = (BASE_SPAN / Math.exp(HANDOFF_LOG)) * 1.55;
+  const crawlAmp = 0.18 * Math.min(1, Math.max(0, (deep - 0.8) / 2.7));
+  const crawlX =
+    crawlAmp * Math.sin(deep * 0.028 + aimX * 1.1) + aimX * (0.04 * Math.min(1, Math.max(0, (deep - 1) / 3)));
+  const crawlY =
+    crawlAmp * Math.cos(deep * 0.025 + aimY * 1.0) + aimY * (0.04 * Math.min(1, Math.max(0, (deep - 1) / 3)));
+
+  const lf = deep / LOG_PERIOD + 0.28;
+  const p0 = lf - Math.floor(lf);
+  const p1 = lf - 0.5 - Math.floor(lf - 0.5);
+  const span0 = matchSpan / Math.exp(p0 * LOG_PERIOD);
+  const span1 = matchSpan / Math.exp(p1 * LOG_PERIOD);
+  const w0 = Math.max(layerWeight(p0), 0.001);
+  const w1 = Math.max(layerWeight(p1), 0.001);
+  const a = sampleField(uvx, uvy, crawlX, crawlY, span0, 1, jx, jy, maxI, time, paletteMode);
+  const b = sampleField(uvx, uvy, crawlX, crawlY, span1, 1, jx, jy, maxI, time, paletteMode);
+  const inv = 1 / (w0 + w1);
+  return [(a[0] * w0 + b[0] * w1) * inv, (a[1] * w0 + b[1] * w1) * inv, (a[2] * w0 + b[2] * w1) * inv];
+}
 
 export function createCanvasRenderer(canvas) {
   const ctx = canvas.getContext("2d", { alpha: false, desynchronized: true });
@@ -96,8 +91,8 @@ export function createCanvasRenderer(canvas) {
   let imageData = null;
 
   function resize() {
-    const w = Math.max(200, Math.floor(window.innerWidth * 0.4));
-    const h = Math.max(300, Math.floor(window.innerHeight * 0.4));
+    const w = Math.max(180, Math.floor(window.innerWidth * 0.35));
+    const h = Math.max(280, Math.floor(window.innerHeight * 0.35));
     if (canvas.width !== w || canvas.height !== h) {
       canvas.width = w;
       canvas.height = h;
@@ -107,52 +102,38 @@ export function createCanvasRenderer(canvas) {
     return false;
   }
 
-  function render({ logZoom, aimX, aimY, iters, time, palette }) {
+  function render({ logZoom, centerX, centerY, aimX, aimY, iters, time, palette }) {
     resize();
     const w = canvas.width;
     const h = canvas.height;
     if (!imageData) imageData = ctx.createImageData(w, h);
     const data = imageData.data;
     const aspect = w / h;
-    const lf = Math.max(logZoom, 0) / LOG_OCTAVE;
+    const lz = Math.max(logZoom, 0);
     const maxI = Math.min(iters, 70);
+    const clampedZoom = Math.exp(Math.min(lz, HANDOFF_LOG + HANDOFF_WIDTH));
+    const realSpan = BASE_SPAN / clampedZoom;
+    const handoff = Math.min(1, Math.max(0, (lz - HANDOFF_LOG) / HANDOFF_WIDTH));
+    const deep = Math.max(0, lz - HANDOFF_LOG);
 
     for (let y = 0; y < h; y++) {
       const uvy = ((y + 0.5) / h) * 2 - 1;
       for (let x = 0; x < w; x++) {
         const uvx = (((x + 0.5) / w) * 2 - 1) * aspect;
-        let r = 0;
-        let g = 0;
-        let b = 0;
-        let wSum = 0;
-        // Two layers on CPU for speed; still hides the wrap.
-        for (let i = 0; i < 2; i++) {
-          const shifted = lf - i / 2;
-          const octave = Math.floor(shifted);
-          const phase = shifted - octave;
-          const localZoom = Math.exp(phase * LOG_OCTAVE);
-          const weight = Math.max(layerWeight(phase), 0.02);
-          const col = layerColor(
-            uvx,
-            uvy,
-            octave + 17 * i,
-            localZoom,
-            aimX,
-            aimY,
-            maxI,
-            time,
-            palette
-          );
-          r += col[0] * weight;
-          g += col[1] * weight;
-          b += col[2] * weight;
-          wSum += weight;
+        const real = sampleField(uvx, uvy, centerX, centerY, realSpan, 0, centerX, centerY, maxI, time, palette);
+        let r = real[0];
+        let g = real[1];
+        let b = real[2];
+        if (handoff > 0) {
+          const fake = fakeJulia(uvx, uvy, deep, centerX, centerY, aimX, aimY, maxI, time, palette);
+          r = r * (1 - handoff) + fake[0] * handoff;
+          g = g * (1 - handoff) + fake[1] * handoff;
+          b = b * (1 - handoff) + fake[2] * handoff;
         }
-        const inv = 1 / Math.max(wSum, 1e-3);
         const idx = (y * w + x) * 4;
-        data[idx] = r * inv;
-        data[idx + 1] = g * inv;
-        data[idx + 2] = b * inv;
+        data[idx] = r;
+        data[idx + 1] = g;
+        data[idx + 2] = b;
         data[idx + 3] = 255;
       }
     }

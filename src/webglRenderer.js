@@ -61,6 +61,7 @@ function buildRenderer(canvas, gl, kind, vert, frag, isWebGL2) {
     res: gl.getUniformLocation(program, "u_res"),
     aspect: gl.getUniformLocation(program, "u_aspect"),
     logZoom: gl.getUniformLocation(program, "u_logZoom"),
+    center: gl.getUniformLocation(program, "u_center"),
     aim: gl.getUniformLocation(program, "u_aim"),
     time: gl.getUniformLocation(program, "u_time"),
     palette: gl.getUniformLocation(program, "u_palette"),
@@ -80,13 +81,14 @@ function buildRenderer(canvas, gl, kind, vert, frag, isWebGL2) {
     return false;
   }
 
-  function render({ logZoom, aimX, aimY, iters, time, palette }) {
+  function render({ logZoom, centerX, centerY, aimX, aimY, iters, time, palette }) {
     resize();
     gl.useProgram(program);
     bind();
     gl.uniform2f(uniforms.res, canvas.width, canvas.height);
     gl.uniform1f(uniforms.aspect, canvas.width / Math.max(1, canvas.height));
     gl.uniform1f(uniforms.logZoom, logZoom);
+    gl.uniform2f(uniforms.center, centerX, centerY);
     gl.uniform2f(uniforms.aim, aimX, aimY);
     gl.uniform1f(uniforms.time, time);
     gl.uniform1f(uniforms.palette, palette);
@@ -95,7 +97,16 @@ function buildRenderer(canvas, gl, kind, vert, frag, isWebGL2) {
   }
 
   resize();
-  render({ logZoom: 0, aimX: 0, aimY: 0, iters: 120, time: 0, palette: 0 });
+  render({
+    logZoom: 0,
+    centerX: -0.5,
+    centerY: 0,
+    aimX: 0,
+    aimY: 0,
+    iters: 120,
+    time: 0,
+    palette: 0,
+  });
 
   return { kind, resize, render, canvas, infinite: true };
 }
