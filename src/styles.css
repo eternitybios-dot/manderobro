@@ -44,20 +44,13 @@ body {
   overflow: hidden;
 }
 
-/* Brief flash when diving into the next infinite relay */
-#app.warp::after {
-  content: "";
+.fade-veil {
   position: absolute;
   inset: 0;
   z-index: 3;
   pointer-events: none;
-  background: radial-gradient(circle at 50% 45%, rgba(61, 224, 197, 0.28), transparent 55%);
-  animation: warp-flash 0.55s ease-out forwards;
-}
-
-@keyframes warp-flash {
-  0% { opacity: 0.85; }
-  100% { opacity: 0; }
+  background: #041015;
+  opacity: 0;
 }
 
 #gl {

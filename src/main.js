@@ -2,8 +2,9 @@ import { createWebGLRenderer } from "./webglRenderer.js";
 import { createCanvasRenderer } from "./canvasRenderer.js";
 
 /**
- * Deep-looking landmarks. Auto-zoom relays BEFORE float precision turns
- * the image into a mosaic, so the dive stays sharp forever.
+ * Dive landmarks. Auto-zoom ONLY moves inward.
+ * When precision would mosaic, we fade → snap to the next site → fade in,
+ * never animating a zoom-out.
  */
 const DIVE_SITES = [
   { x: -0.7436438870371587, y: 0.13182590420531197 },
@@ -22,9 +23,9 @@ const DIVE_SITES = [
   { x: 0.001643721971153, y: -0.822467633298876 },
 ];
 
-const INITIAL_SCALE = 2.5;
-/** Resume each leg still sharp, with a long clear dive ahead. */
-const RELAY_SCALE = 0.085;
+const INITIAL_SCALE = 1.8;
+/** After a fade snap, resume here — still sharp, long dive ahead. */
+const RELAY_SCALE = 0.06;
 const MAX_SCALE = 3.5;
 
 const zoomLabel = document.getElementById("zoomLabel");
@@ -38,7 +39,7 @@ const resetBtn = document.getElementById("resetBtn");
 const paletteBtn = document.getElementById("paletteBtn");
 const paletteCtlBtn = document.getElementById("paletteCtlBtn");
 const swatch = document.getElementById("swatch");
-const appEl = document.getElementById("app");
+const fadeVeil = document.getElementById("fadeVeil");
 
 let canvas = document.getElementById("gl");
 
@@ -54,20 +55,16 @@ function createRenderer() {
     console.warn(err);
   }
 
-  if (canvas.getContext) {
-    const host = canvas.parentElement;
-    const fresh = document.createElement("canvas");
-    fresh.id = "gl";
-    fresh.setAttribute("aria-label", "マンデルブロ集合");
-    host.replaceChild(fresh, canvas);
-    canvas = fresh;
-  }
+  const host = canvas.parentElement;
+  const fresh = document.createElement("canvas");
+  fresh.id = "gl";
+  fresh.setAttribute("aria-label", "マンデルブロ集合");
+  host.replaceChild(fresh, canvas);
+  canvas = fresh;
   return createCanvasRenderer(canvas);
 }
 
 const renderer = createRenderer();
-
-/** Relay before the mosaic zone — never wait for precision death. */
 const MIN_SCALE = renderer.minScale || 8e-5;
 
 const state = {
@@ -76,7 +73,7 @@ const state = {
   scale: INITIAL_SCALE,
   siteIndex: 0,
   auto: true,
-  speedNorm: 0.55,
+  speedNorm: 0.45,
   palette: 0,
   zoomCarry: 1,
   pointerIds: new Map(),
@@ -84,11 +81,12 @@ const state = {
   pinchStartScale: 1,
   dragStart: null,
   needsRender: true,
-  /** Soft handoff instead of a hard jump */
-  relaying: false,
-  relayT: 0,
-  relayFrom: { x: 0, y: 0, scale: 1 },
-  relayTo: { x: 0, y: 0, scale: RELAY_SCALE },
+  /**
+   * fade: null | { phase: 'out'|'in', t: 0..1 }
+   * During fade-out we keep zooming in. On peak black we snap. Then fade-in.
+   */
+  fade: null,
+  relayCount: 0,
 };
 
 function effectiveZoom() {
@@ -108,20 +106,21 @@ function formatZoom() {
 function iterationBudget(scale) {
   const zoom = Math.max(1, INITIAL_SCALE / scale);
   if (renderer.kind === "canvas2d") {
-    return Math.min(200, Math.floor(80 + 22 * Math.log2(zoom + 1)));
+    return Math.min(220, Math.floor(100 + 28 * Math.log2(zoom + 1)));
   }
-  return Math.min(420, Math.floor(140 + 30 * Math.log2(zoom + 1)));
+  // Keep boundaries smooth before we hand off to the next dive
+  return Math.min(720, Math.floor(220 + 48 * Math.log2(zoom + 1)));
 }
 
 function zoomRateFromSlider(norm) {
   if (norm <= 0.001) return 0;
-  const t = Math.pow(norm, 1.2);
-  return 0.2 + t * 3.2;
+  const t = Math.pow(norm, 1.15);
+  return 0.18 + t * 2.6;
 }
 
 function formatSpeed(norm) {
   if (norm <= 0.001) return "停止";
-  const mult = zoomRateFromSlider(norm) / zoomRateFromSlider(0.55);
+  const mult = zoomRateFromSlider(norm) / zoomRateFromSlider(0.45);
   return `×${mult.toFixed(1)}`;
 }
 
@@ -149,37 +148,26 @@ function cyclePalette() {
   state.needsRender = true;
 }
 
-function easeInOut(t) {
-  return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+function setFadeOpacity(a) {
+  fadeVeil.style.opacity = String(Math.max(0, Math.min(1, a)));
 }
 
-/** Start a soft relay into the next landmark — still zooming, always sharp. */
-function beginRelay() {
-  if (state.relaying) return;
-
+/** Snap to next site in one frame — scale may jump, but we never animate zoom-out. */
+function snapToNextSite() {
   const prevScale = state.scale;
   state.zoomCarry *= RELAY_SCALE / Math.max(prevScale, 1e-30);
-
   state.siteIndex = (state.siteIndex + 1) % DIVE_SITES.length;
   const site = DIVE_SITES[state.siteIndex];
-
-  state.relaying = true;
-  state.relayT = 0;
-  state.relayFrom = {
-    x: state.centerX,
-    y: state.centerY,
-    scale: state.scale,
-  };
-  state.relayTo = {
-    x: site.x,
-    y: site.y,
-    scale: RELAY_SCALE,
-  };
-
-  appEl.classList.remove("warp");
-  void appEl.offsetWidth;
-  appEl.classList.add("warp");
+  state.centerX = site.x;
+  state.centerY = site.y;
+  state.scale = RELAY_SCALE;
+  state.relayCount += 1;
   state.needsRender = true;
+}
+
+function beginFadeRelay() {
+  if (state.fade) return;
+  state.fade = { phase: "out", t: 0 };
 }
 
 function resetView() {
@@ -188,13 +176,13 @@ function resetView() {
   state.centerY = DIVE_SITES[0].y;
   state.scale = INITIAL_SCALE;
   state.zoomCarry = 1;
-  state.relaying = false;
-  state.relayT = 0;
+  state.fade = null;
+  state.relayCount = 0;
+  setFadeOpacity(0);
   setAuto(true);
-  if (state.speedNorm <= 0) state.speedNorm = 0.55;
+  if (state.speedNorm <= 0) state.speedNorm = 0.45;
   updateSpeedUI();
   state.needsRender = true;
-  appEl.classList.remove("warp");
 }
 
 function screenToComplex(clientX, clientY) {
@@ -209,11 +197,11 @@ function screenToComplex(clientX, clientY) {
 }
 
 function zoomAt(clientX, clientY, factor) {
-  if (state.relaying) return;
+  if (state.fade) return;
   const before = screenToComplex(clientX, clientY);
   const next = state.scale * factor;
-  if (next < MIN_SCALE) {
-    beginRelay();
+  if (next <= MIN_SCALE) {
+    beginFadeRelay();
     return;
   }
   state.scale = Math.min(MAX_SCALE, next);
@@ -311,7 +299,7 @@ autoBtn.addEventListener("click", () => {
     state.speedNorm = 0;
   } else {
     setAuto(true);
-    if (state.speedNorm <= 0) state.speedNorm = 0.55;
+    if (state.speedNorm <= 0) state.speedNorm = 0.45;
   }
   updateSpeedUI();
 });
@@ -328,45 +316,78 @@ window.addEventListener("resize", () => {
 renderer.resize();
 updateSpeedUI();
 setAuto(true);
-console.info("[深層] renderer:", renderer.kind, "minScale:", MIN_SCALE, "highp:", renderer.highp);
+setFadeOpacity(0);
+
+/** Test/debug hook — used by verification script */
+window.__SHINSO__ = {
+  getState: () => ({
+    scale: state.scale,
+    zoom: effectiveZoom(),
+    siteIndex: state.siteIndex,
+    relayCount: state.relayCount,
+    auto: state.auto,
+    fading: !!state.fade,
+    fadePhase: state.fade?.phase ?? null,
+    centerX: state.centerX,
+    centerY: state.centerY,
+    renderer: renderer.kind,
+    minScale: MIN_SCALE,
+  }),
+  setSpeed: (n) => {
+    state.speedNorm = Math.max(0, Math.min(1, n));
+    updateSpeedUI();
+    if (state.speedNorm > 0) setAuto(true);
+  },
+  reset: resetView,
+};
+
+console.info("[深層] renderer:", renderer.kind, "minScale:", MIN_SCALE);
 
 let lastT = performance.now();
 let hudAcc = 0;
+
+function diveIn(dt) {
+  const rate = zoomRateFromSlider(state.speedNorm);
+  if (rate <= 0) return;
+  state.scale *= Math.exp(-rate * dt);
+  // Very gentle keep-on-target — too strong feels like sliding
+  const site = DIVE_SITES[state.siteIndex];
+  const pull = 1 - Math.exp(-0.12 * dt);
+  state.centerX += (site.x - state.centerX) * pull;
+  state.centerY += (site.y - state.centerY) * pull;
+  state.needsRender = true;
+}
 
 function tick(now) {
   const dt = Math.min(0.05, (now - lastT) / 1000);
   lastT = now;
 
-  if (state.relaying) {
-    // Short soft handoff: log-lerp scale + lerp center, keep diving afterward
-    state.relayT += dt * 1.8;
-    const t = Math.min(1, state.relayT);
-    const e = easeInOut(t);
-    state.centerX = state.relayFrom.x + (state.relayTo.x - state.relayFrom.x) * e;
-    state.centerY = state.relayFrom.y + (state.relayTo.y - state.relayFrom.y) * e;
-    const logFrom = Math.log(Math.max(state.relayFrom.scale, 1e-30));
-    const logTo = Math.log(state.relayTo.scale);
-    state.scale = Math.exp(logFrom + (logTo - logFrom) * e);
-    state.needsRender = true;
-    if (t >= 1) {
-      state.relaying = false;
-      state.centerX = state.relayTo.x;
-      state.centerY = state.relayTo.y;
-      state.scale = state.relayTo.scale;
+  if (state.fade) {
+    // Fade timing: ~0.35s out, snap, ~0.45s in
+    const speed = state.fade.phase === "out" ? 2.8 : 2.2;
+    state.fade.t += dt * speed;
+
+    if (state.fade.phase === "out") {
+      // Keep diving while fading to black — motion never reverses
+      if (state.auto) diveIn(dt);
+      setFadeOpacity(Math.min(1, state.fade.t));
+      if (state.fade.t >= 1) {
+        snapToNextSite();
+        state.fade = { phase: "in", t: 0 };
+        setFadeOpacity(1);
+      }
+    } else {
+      setFadeOpacity(1 - Math.min(1, state.fade.t));
+      if (state.auto) diveIn(dt);
+      if (state.fade.t >= 1) {
+        state.fade = null;
+        setFadeOpacity(0);
+      }
     }
   } else if (state.auto) {
-    const rate = zoomRateFromSlider(state.speedNorm);
-    if (rate > 0) {
-      state.scale *= Math.exp(-rate * dt);
-      const site = DIVE_SITES[state.siteIndex];
-      const pull = 1 - Math.exp(-0.5 * dt);
-      state.centerX += (site.x - state.centerX) * pull;
-      state.centerY += (site.y - state.centerY) * pull;
-      state.needsRender = true;
-
-      if (state.scale <= MIN_SCALE) {
-        beginRelay();
-      }
+    diveIn(dt);
+    if (state.scale <= MIN_SCALE) {
+      beginFadeRelay();
     }
   }
 
@@ -380,7 +401,7 @@ function tick(now) {
     iterLabel.textContent = String(iters);
   }
 
-  if (state.needsRender || state.auto || state.relaying) {
+  if (state.needsRender || state.auto || state.fade) {
     try {
       renderer.render({
         centerX: state.centerX,

@@ -1,6 +1,6 @@
-/** CPU Mandelbrot fallback — keep resolution high enough to avoid mosaic look. */
+/** CPU Mandelbrot fallback — full frames only (progressive rows look broken while zooming). */
 
-function paletteColor(t, mode, time) {
+function paletteColor(t, time) {
   t = (t + time * 0.035) % 1;
   if (t < 0) t += 1;
   const r = 0.5 + 0.5 * Math.cos(6.28318 * (t + 0.0) + 0.2);
@@ -18,39 +18,33 @@ export function createCanvasRenderer(canvas) {
   if (!ctx) throw new Error("Canvas2D unavailable");
 
   let imageData = null;
-  let row = 0;
 
   function resize() {
-    const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
-    // Sharper than before — mosaic was mostly from upscaling a tiny buffer
-    const w = Math.max(280, Math.floor(window.innerWidth * dpr * 0.55));
-    const h = Math.max(400, Math.floor(window.innerHeight * dpr * 0.55));
+    // Modest buffer so full-frame CPU render stays realtime on phones
+    const w = Math.max(220, Math.floor(window.innerWidth * 0.42));
+    const h = Math.max(320, Math.floor(window.innerHeight * 0.42));
     if (canvas.width !== w || canvas.height !== h) {
       canvas.width = w;
       canvas.height = h;
       imageData = ctx.createImageData(w, h);
-      row = 0;
       return true;
     }
     return false;
   }
 
-  function render({ centerX, centerY, scale, iters, time, palette }) {
+  function render({ centerX, centerY, scale, iters, time }) {
     resize();
     const w = canvas.width;
     const h = canvas.height;
     if (!imageData || imageData.width !== w || imageData.height !== h) {
       imageData = ctx.createImageData(w, h);
-      row = 0;
     }
 
     const data = imageData.data;
     const aspect = w / h;
-    const maxI = Math.min(iters, 180);
-    const rowsPerFrame = Math.max(12, Math.ceil(h / 4));
+    const maxI = Math.min(iters, 120);
 
-    for (let n = 0; n < rowsPerFrame; n++) {
-      const y = row % h;
+    for (let y = 0; y < h; y++) {
       const cy = centerY + (((y + 0.5) / h) * 2 - 1) * scale;
       for (let x = 0; x < w; x++) {
         const cx = centerX + (((x + 0.5) / w) * 2 - 1) * aspect * scale;
@@ -75,13 +69,12 @@ export function createCanvasRenderer(canvas) {
         }
         const mag2 = zx * zx + zy * zy;
         const smooth = i - Math.log2(Math.log2(Math.max(mag2, 1.0001))) + 4;
-        const [r, g, b] = paletteColor(smooth * 0.018, palette, time);
+        const [r, g, b] = paletteColor(smooth * 0.018, time);
         data[idx] = r;
         data[idx + 1] = g;
         data[idx + 2] = b;
         data[idx + 3] = 255;
       }
-      row++;
     }
 
     ctx.putImageData(imageData, 0, 0);
@@ -92,7 +85,6 @@ export function createCanvasRenderer(canvas) {
     resize,
     render,
     canvas,
-    // JS numbers are float64, but we still relay early for speed/quality
-    minScale: 4e-5,
+    minScale: 5e-5,
   };
 }

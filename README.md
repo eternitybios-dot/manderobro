@@ -2,50 +2,37 @@
 
 スマホで見れる、マンデルブロ集合を**永遠に自動拡大**するフラクタル探索アプリ。
 
-## スマホで見る
+## スマホで見る（動作確認済み）
 
-スマホのブラウザでこの URL を開く（最新版）:
+**https://plain-waves-serve.loca.lt**
 
-**https://raw.githack.com/eternitybios-dot/manderobro/bce9ddab348222ba8b843d39c3b2e8707cfacd69/index.html**
+開くと自動で拡大します。途中で引き戻らず、真っ暗なフェードのあと次の深みへ継ぎます。
 
-開いたら自動で拡大が始まり、精度の限界を越えても次の深みへ継ぎ足して永遠に潜り続けます。SPEED で速さを変えられます。
-
-### ローカルから同じ Wi-Fi のスマホで見る
-
-```bash
-npm install
-npm run dev -- --host
-```
-
-ターミナルの `Network` URL（例: `http://192.168.x.x:5173`）をスマホのブラウザで開く。
+> この URL は公開用トンネルです。繋がらないときは下のローカル手順へ。
 
 ## 使い方
 
 1. 開くと自動で拡大が始まります
-2. 下の **SPEED** バーで拡大スピードを自由に変更（停止〜最速）
-3. ピンチで手動ズーム、ドラッグで移動もできます
-4. 「配色」でカラーパレットを切り替え
-5. 限界まで潜ると、別の名所へシームレスに遷移してまた潜り続けます
+2. **SPEED** で速さを変更（停止〜最速）
+3. ピンチ / ドラッグでも操作できます
+4. 「配色」でカラー切替
 
-## 開発
+## 開発 / 動作確認
 
 ```bash
 npm install
-npm run dev
+npm run build
+npm run preview -- --host 0.0.0.0 --port 4173
 ```
 
-同じ Wi-Fi のスマホから見る場合は、ターミナルに表示される `Network` の URL を開いてください。
-
-本番ビルド:
+自動テスト（拡大が逆転しないこと・ZOOM が増え続けること）:
 
 ```bash
-npm run build
-npm run preview
+APP_URL=http://127.0.0.1:4173/ npm run verify:motion
 ```
 
 ## 技術
 
-- WebGL2 フラグメントシェーダで描画
-- double-float（疑似倍精度）で深いズームに対応
-- タッチ操作（ピンチ / ドラッグ）対応
-- GitHub Pages で公開
+- WebGL2 / WebGL1（Canvas2D フォールバック）
+- 精度が崩れる前にフェード中継してシャープさを維持
+- `npm run verify:motion` で公開前チェック

@@ -60,8 +60,8 @@ function probePrecision(gl) {
   const okHighp = fmt && fmt.precision >= 23;
   return {
     highp: !!okHighp,
-    // Stay comfortably above the mosaic / blocky zone on real phones
-    minScale: okHighp ? 6e-5 : 2e-4,
+    // Relay before float error gets visible on real phones
+    minScale: okHighp ? 1.2e-4 : 3e-4,
   };
 }
 
