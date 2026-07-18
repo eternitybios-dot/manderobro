@@ -6,7 +6,32 @@ void main() {
 }
 `;
 
-const PALETTE_GLSL = `
+export const VERT_WEBGL1 = `
+attribute vec2 a_pos;
+void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }
+`;
+
+/**
+ * Fake infinite Mandelbrot-like zoom.
+ * Zoom lives in log-space forever. Every octave we renormalize into a fresh
+ * region (hash-seeded), and crossfade near the boundary so the dive feels
+ * continuous — no tiny floats, no mosaic wall.
+ */
+const FRAG_BODY = `
+uniform vec2 u_res;
+uniform float u_aspect;
+uniform float u_logZoom;
+uniform vec2 u_aim;
+uniform float u_time;
+uniform float u_palette;
+uniform float u_iters;
+
+const float LOG_OCTAVE = 2.07944154168; // log(8)
+
+vec2 hash21(float n) {
+  return fract(sin(vec2(n, n * 1.6180339887)) * vec2(43758.5453, 22578.1459));
+}
+
 vec3 palette(float t, float mode) {
   t = fract(t);
   if (mode < 0.5) {
@@ -25,205 +50,83 @@ vec3 palette(float t, float mode) {
     smoothstep(0.0, 1.0, 0.5 + 0.5 * sin(t * 18.0))
   ) + 0.25 * cos(6.28318 * (t + vec3(0.1, 0.25, 0.4)));
 }
-`;
 
-// Fast path — used while zoom is still shallow
-export const FRAG_WEBGL2_FAST = `#version 300 es
-precision highp float;
-uniform vec2 u_res;
-uniform vec2 u_center;
-uniform float u_scale;
-uniform float u_iters;
-uniform float u_time;
-uniform float u_palette;
-uniform float u_aspect;
-out vec4 outColor;
-${PALETTE_GLSL}
-void main() {
-  vec2 uv = ((gl_FragCoord.xy - 0.5) / u_res) * 2.0 - 1.0;
-  uv.x *= u_aspect;
-  vec2 c = u_center + uv * u_scale;
-  vec2 z = vec2(0.0);
+vec2 regionCenter(float octave, vec2 aim) {
+  vec2 h = hash21(octave + 11.0);
+  vec2 h2 = hash21(octave * 3.7 + 2.0);
+  vec2 base = vec2(-0.72, 0.12) + vec2(0.5, 0.7) * (h - 0.5);
+  vec2 mini = vec2(-1.25, 0.02) + 0.4 * (h2 - 0.5);
+  vec2 pick = mix(base, mini, step(0.52, h.x));
+  return pick + aim * (0.18 + 0.2 * h.y);
+}
+
+float escape(vec2 c, float maxI, float juliaMix, vec2 jSeed) {
+  vec2 z = mix(vec2(0.0), c * 0.3, juliaMix);
+  vec2 k = mix(c, jSeed, juliaMix * 0.8);
   float i;
-  float maxI = u_iters;
   for (i = 0.0; i < maxI; i++) {
     float zx2 = z.x * z.x;
     float zy2 = z.y * z.y;
     if (zx2 + zy2 > 256.0) break;
-    z = vec2(zx2 - zy2, 2.0 * z.x * z.y) + c;
+    z = vec2(zx2 - zy2, 2.0 * z.x * z.y) + k;
   }
-  if (i >= maxI - 0.5) { outColor = vec4(0.01, 0.02, 0.03, 1.0); return; }
+  if (i >= maxI - 0.5) return -1.0;
   float mag = length(z);
-  float smoothI = i - log2(log2(max(mag, 1.0001))) + 4.0;
-  vec3 col = palette(smoothI * 0.018 + u_time * 0.035, u_palette);
-  col += exp(-0.012 * smoothI) * 0.12 * vec3(0.4, 0.9, 0.85);
-  outColor = vec4(pow(max(col, 0.0), vec3(0.92)), 1.0);
+  return i - log2(log2(max(mag, 1.0001))) + 4.0;
+}
+
+vec3 layerColor(vec2 uv, float octave, float localZoom, vec2 aim, float maxI) {
+  vec2 center = regionCenter(octave, aim);
+  vec2 h = hash21(octave + 5.0);
+  float juliaMix = 0.1 + 0.2 * h.x;
+  vec2 jSeed = vec2(-0.42, 0.63) + (h - 0.5) * 0.95 + aim * 0.12;
+  float scale = 1.7 / max(localZoom, 1.0);
+  vec2 c = center + uv * scale;
+  float smoothI = escape(c, maxI, juliaMix, jSeed);
+  if (smoothI < 0.0) return vec3(0.01, 0.02, 0.03);
+  float t = smoothI * 0.02 + u_time * 0.03 + octave * 0.08;
+  vec3 col = palette(t, u_palette);
+  col += exp(-0.014 * smoothI) * 0.15 * vec3(0.35, 0.9, 0.8);
+  col *= 0.9 + 0.2 * hash21(octave + 19.0).x;
+  return pow(max(col, 0.0), vec3(0.92));
+}
+
+vec3 render(vec2 uv) {
+  float lf = max(u_logZoom, 0.0) / LOG_OCTAVE;
+  float octave = floor(lf);
+  float frac = fract(lf);
+  float localZoom = exp(frac * LOG_OCTAVE);
+  float maxI = min(u_iters, 200.0);
+
+  vec3 colA = layerColor(uv, octave, localZoom, u_aim, maxI);
+  // Next octave starts "zoomed out" relative to itself, matching A's deep end
+  vec3 colB = layerColor(uv, octave + 1.0, 1.0, u_aim, maxI);
+  float w = smoothstep(0.72, 1.0, frac);
+  return mix(colA, colB, w);
 }
 `;
 
-// Deep path — double-float (no fma) for continuous zoom far past float32 mosaic
-export const FRAG_WEBGL2_DEEP = `#version 300 es
+export const FRAG_WEBGL2 = `#version 300 es
 precision highp float;
-uniform vec2 u_res;
-uniform vec2 u_center_hi;
-uniform vec2 u_center_lo;
-uniform float u_scale;
-uniform float u_iters;
-uniform float u_time;
-uniform float u_palette;
-uniform float u_aspect;
+${FRAG_BODY}
 out vec4 outColor;
-const float SPLIT = 4097.0;
-vec2 ds_set(float a) { return vec2(a, 0.0); }
-vec2 ds_add(vec2 a, vec2 b) {
-  float s = a.x + b.x;
-  float v = s - a.x;
-  float e = (a.x - (s - v)) + (b.x - v) + a.y + b.y;
-  float t = s + e;
-  return vec2(t, e - (t - s));
-}
-vec2 ds_mul(vec2 a, vec2 b) {
-  float c = SPLIT * a.x;
-  float a1 = c - (c - a.x);
-  float a2 = a.x - a1;
-  float d = SPLIT * b.x;
-  float b1 = d - (d - b.x);
-  float b2 = b.x - b1;
-  float p = a.x * b.x;
-  float err = ((a1 * b1 - p) + a1 * b2 + a2 * b1) + a2 * b2;
-  err += a.x * b.y + a.y * b.x;
-  float t = p + err;
-  return vec2(t, err - (t - p));
-}
-${PALETTE_GLSL}
 void main() {
-  vec2 uv = ((gl_FragCoord.xy - 0.5) / u_res) * 2.0 - 1.0;
+  vec2 uv = (gl_FragCoord.xy / u_res) * 2.0 - 1.0;
   uv.x *= u_aspect;
-  vec2 cx = ds_add(vec2(u_center_hi.x, u_center_lo.x), ds_set(uv.x * u_scale));
-  vec2 cy = ds_add(vec2(u_center_hi.y, u_center_lo.y), ds_set(uv.y * u_scale));
-  vec2 zx = ds_set(0.0);
-  vec2 zy = ds_set(0.0);
-  float i;
-  float maxI = u_iters;
-  for (i = 0.0; i < maxI; i++) {
-    vec2 zx2 = ds_mul(zx, zx);
-    vec2 zy2 = ds_mul(zy, zy);
-    vec2 tw = ds_mul(ds_mul(zx, zy), ds_set(2.0));
-    vec2 nx = ds_add(ds_add(zx2, vec2(-zy2.x, -zy2.y)), cx);
-    vec2 ny = ds_add(tw, cy);
-    zx = nx; zy = ny;
-    if (zx.x * zx.x + zy.x * zy.x > 256.0) break;
-  }
-  if (i >= maxI - 0.5) { outColor = vec4(0.01, 0.02, 0.03, 1.0); return; }
-  float mag = length(vec2(zx.x, zy.x));
-  float smoothI = i - log2(log2(max(mag, 1.0001))) + 4.0;
-  vec3 col = palette(smoothI * 0.018 + u_time * 0.035, u_palette);
-  col += exp(-0.012 * smoothI) * 0.12 * vec3(0.4, 0.9, 0.85);
-  outColor = vec4(pow(max(col, 0.0), vec3(0.92)), 1.0);
+  outColor = vec4(render(uv), 1.0);
 }
 `;
 
-export const VERT_WEBGL1 = `
-attribute vec2 a_pos;
-void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }
-`;
-
-export const FRAG_WEBGL1_FAST = `
+export const FRAG_WEBGL1 = `
 #ifdef GL_FRAGMENT_PRECISION_HIGH
 precision highp float;
 #else
 precision mediump float;
 #endif
-uniform vec2 u_res;
-uniform vec2 u_center;
-uniform float u_scale;
-uniform float u_iters;
-uniform float u_time;
-uniform float u_palette;
-uniform float u_aspect;
-${PALETTE_GLSL}
+${FRAG_BODY}
 void main() {
-  vec2 uv = ((gl_FragCoord.xy - 0.5) / u_res) * 2.0 - 1.0;
+  vec2 uv = (gl_FragCoord.xy / u_res) * 2.0 - 1.0;
   uv.x *= u_aspect;
-  vec2 c = u_center + uv * u_scale;
-  vec2 z = vec2(0.0);
-  float i;
-  float maxI = u_iters;
-  for (i = 0.0; i < maxI; i++) {
-    float zx2 = z.x * z.x;
-    float zy2 = z.y * z.y;
-    if (zx2 + zy2 > 256.0) break;
-    z = vec2(zx2 - zy2, 2.0 * z.x * z.y) + c;
-  }
-  if (i >= maxI - 0.5) { gl_FragColor = vec4(0.01, 0.02, 0.03, 1.0); return; }
-  float mag = length(z);
-  float smoothI = i - log2(log2(max(mag, 1.0001))) + 4.0;
-  vec3 col = palette(smoothI * 0.018 + u_time * 0.035, u_palette);
-  col += exp(-0.012 * smoothI) * 0.12 * vec3(0.4, 0.9, 0.85);
-  gl_FragColor = vec4(pow(max(col, 0.0), vec3(0.92)), 1.0);
-}
-`;
-
-export const FRAG_WEBGL1_DEEP = `
-#ifdef GL_FRAGMENT_PRECISION_HIGH
-precision highp float;
-#else
-precision mediump float;
-#endif
-uniform vec2 u_res;
-uniform vec2 u_center_hi;
-uniform vec2 u_center_lo;
-uniform float u_scale;
-uniform float u_iters;
-uniform float u_time;
-uniform float u_palette;
-uniform float u_aspect;
-const float SPLIT = 4097.0;
-vec2 ds_set(float a) { return vec2(a, 0.0); }
-vec2 ds_add(vec2 a, vec2 b) {
-  float s = a.x + b.x;
-  float v = s - a.x;
-  float e = (a.x - (s - v)) + (b.x - v) + a.y + b.y;
-  float t = s + e;
-  return vec2(t, e - (t - s));
-}
-vec2 ds_mul(vec2 a, vec2 b) {
-  float c = SPLIT * a.x;
-  float a1 = c - (c - a.x);
-  float a2 = a.x - a1;
-  float d = SPLIT * b.x;
-  float b1 = d - (d - b.x);
-  float b2 = b.x - b1;
-  float p = a.x * b.x;
-  float err = ((a1 * b1 - p) + a1 * b2 + a2 * b1) + a2 * b2;
-  err += a.x * b.y + a.y * b.x;
-  float t = p + err;
-  return vec2(t, err - (t - p));
-}
-${PALETTE_GLSL}
-void main() {
-  vec2 uv = ((gl_FragCoord.xy - 0.5) / u_res) * 2.0 - 1.0;
-  uv.x *= u_aspect;
-  vec2 cx = ds_add(vec2(u_center_hi.x, u_center_lo.x), ds_set(uv.x * u_scale));
-  vec2 cy = ds_add(vec2(u_center_hi.y, u_center_lo.y), ds_set(uv.y * u_scale));
-  vec2 zx = ds_set(0.0);
-  vec2 zy = ds_set(0.0);
-  float i;
-  float maxI = u_iters;
-  for (i = 0.0; i < maxI; i++) {
-    vec2 zx2 = ds_mul(zx, zx);
-    vec2 zy2 = ds_mul(zy, zy);
-    vec2 tw = ds_mul(ds_mul(zx, zy), ds_set(2.0));
-    vec2 nx = ds_add(ds_add(zx2, vec2(-zy2.x, -zy2.y)), cx);
-    vec2 ny = ds_add(tw, cy);
-    zx = nx; zy = ny;
-    if (zx.x * zx.x + zy.x * zy.x > 256.0) break;
-  }
-  if (i >= maxI - 0.5) { gl_FragColor = vec4(0.01, 0.02, 0.03, 1.0); return; }
-  float mag = length(vec2(zx.x, zy.x));
-  float smoothI = i - log2(log2(max(mag, 1.0001))) + 4.0;
-  vec3 col = palette(smoothI * 0.018 + u_time * 0.035, u_palette);
-  col += exp(-0.012 * smoothI) * 0.12 * vec3(0.4, 0.9, 0.85);
-  gl_FragColor = vec4(pow(max(col, 0.0), vec3(0.92)), 1.0);
+  gl_FragColor = vec4(render(uv), 1.0);
 }
 `;

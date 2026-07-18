@@ -1,12 +1,12 @@
 import { createWebGLRenderer } from "./webglRenderer.js";
 import { createCanvasRenderer } from "./canvasRenderer.js";
 
-/** Wide overview of the set. Default dive aims at a colorful boundary. */
-const START = { x: -0.5, y: 0.0 };
-/** Seahorse valley — interesting until the user taps their own aim point. */
-const DEFAULT_TARGET = { x: -0.7436438870371587, y: 0.13182590420531197 };
-const INITIAL_SCALE = 2.2;
-const MAX_SCALE = 3.5;
+/**
+ * Fake infinite dive: logZoom grows forever.
+ * The shader renormalizes every octave so floats never get tiny —
+ * looks like seamless Mandelbrot zoom with no precision death.
+ */
+
 const TAP_SLOP_PX = 12;
 
 const zoomLabel = document.getElementById("zoomLabel");
@@ -24,6 +24,8 @@ const aimEl = document.getElementById("aim");
 const limitNote = document.getElementById("limitNote");
 const hintEl = document.getElementById("hint");
 
+if (limitNote) limitNote.hidden = true;
+
 let canvas = document.getElementById("gl");
 
 function createRenderer() {
@@ -37,7 +39,6 @@ function createRenderer() {
   } catch (err) {
     console.warn(err);
   }
-
   const host = canvas.parentElement;
   const fresh = document.createElement("canvas");
   fresh.id = "gl";
@@ -48,32 +49,29 @@ function createRenderer() {
 }
 
 const renderer = createRenderer();
-/** Absolute floor — stop here only; never auto-switch places. */
-const MIN_SCALE = renderer.minScale || (renderer.kind === "canvas2d" ? 1e-14 : 3e-13);
-const DEEP_SCALE = renderer.deepScale || 2.5e-4;
 
 const state = {
-  centerX: START.x,
-  centerY: START.y,
-  /** Locked dive target (complex plane). Updated on tap. */
-  targetX: DEFAULT_TARGET.x,
-  targetY: DEFAULT_TARGET.y,
-  scale: INITIAL_SCALE,
+  logZoom: 0,
+  aimX: 0.15,
+  aimY: 0.35,
   auto: true,
   speedNorm: 0.4,
   palette: 0,
   pointerIds: new Map(),
   pinchStartDist: 0,
-  pinchStartScale: 1,
+  pinchStartLogZoom: 0,
   dragStart: null,
   tapCandidate: null,
   needsRender: true,
-  atLimit: false,
   aimHideTimer: 0,
 };
 
+function effectiveZoom() {
+  return Math.exp(state.logZoom);
+}
+
 function formatZoom() {
-  const z = INITIAL_SCALE / Math.max(state.scale, 1e-30);
+  const z = effectiveZoom();
   if (z < 1000) return `×${z.toFixed(z < 10 ? 1 : 0)}`;
   if (z < 1e6) return `×${(z / 1e3).toFixed(1)}K`;
   if (z < 1e9) return `×${(z / 1e6).toFixed(1)}M`;
@@ -82,22 +80,20 @@ function formatZoom() {
   return `×10^${Math.log10(z).toFixed(1)}`;
 }
 
-function iterationBudget(scale) {
-  const zoom = Math.max(1, INITIAL_SCALE / scale);
+function iterationBudget() {
+  // Mildly rise with depth for richer edges, but stay realtime
+  const octave = state.logZoom / Math.log(8);
   if (renderer.kind === "canvas2d") {
-    return Math.min(220, Math.floor(90 + 26 * Math.log2(zoom + 1)));
+    return Math.min(100, Math.floor(70 + octave * 2));
   }
-  // Deep double-float is heavier — keep iters modest so phones stay smooth
-  if (scale < DEEP_SCALE) {
-    return Math.min(360, Math.floor(140 + 28 * Math.log2(zoom + 1)));
-  }
-  return Math.min(480, Math.floor(160 + 36 * Math.log2(zoom + 1)));
+  return Math.min(180, Math.floor(110 + octave * 3));
 }
 
 function zoomRateFromSlider(norm) {
   if (norm <= 0.001) return 0;
-  const t = Math.pow(norm, 1.15);
-  return 0.12 + t * 2.2;
+  // logZoom per second
+  const t = Math.pow(norm, 1.1);
+  return 0.35 + t * 2.4;
 }
 
 function formatSpeed(norm) {
@@ -116,10 +112,6 @@ function setAuto(on) {
   autoBtn.setAttribute("aria-pressed", on ? "true" : "false");
   autoIcon.textContent = on ? "◈" : "▷";
   autoLabel.textContent = on ? "自動拡大" : "再開";
-  if (on) {
-    state.atLimit = false;
-    limitNote.hidden = true;
-  }
 }
 
 function cyclePalette() {
@@ -138,69 +130,37 @@ function showAim(clientX, clientY) {
   aimEl.style.left = `${clientX}px`;
   aimEl.style.top = `${clientY}px`;
   aimEl.classList.add("show");
-  state.aimHideTimer = 1.2;
+  state.aimHideTimer = 1.1;
 }
 
 function resetView() {
-  state.centerX = START.x;
-  state.centerY = START.y;
-  state.targetX = DEFAULT_TARGET.x;
-  state.targetY = DEFAULT_TARGET.y;
-  state.scale = INITIAL_SCALE;
-  state.atLimit = false;
-  limitNote.hidden = true;
+  state.logZoom = 0;
+  state.aimX = 0.15;
+  state.aimY = 0.35;
   setAuto(true);
   if (state.speedNorm <= 0) state.speedNorm = 0.4;
   updateSpeedUI();
   state.needsRender = true;
   aimEl.classList.remove("show");
+  if (hintEl) hintEl.style.display = "";
 }
 
-function screenToComplex(clientX, clientY) {
+/** Map screen tap to aim in [-1,1]-ish space (steers which fake region we dive). */
+function chooseTarget(clientX, clientY) {
   const rect = canvas.getBoundingClientRect();
   const nx = ((clientX - rect.left) / rect.width) * 2 - 1;
   const ny = -(((clientY - rect.top) / rect.height) * 2 - 1);
-  const aspect = canvas.width / Math.max(1, canvas.height);
-  return {
-    x: state.centerX + nx * aspect * state.scale,
-    y: state.centerY + ny * state.scale,
-  };
-}
-
-/** Choose dive location — continuous zoom continues into this point (no teleport jump). */
-function chooseTarget(clientX, clientY) {
-  const p = screenToComplex(clientX, clientY);
-  state.targetX = p.x;
-  state.targetY = p.y;
-  state.atLimit = false;
-  limitNote.hidden = true;
+  // Blend toward tap so successive taps steer the dive
+  state.aimX = Math.max(-1.2, Math.min(1.2, state.aimX * 0.35 + nx * 0.85));
+  state.aimY = Math.max(-1.2, Math.min(1.2, state.aimY * 0.35 + ny * 0.85));
   showAim(clientX, clientY);
   if (!state.auto) setAuto(true);
   if (state.speedNorm <= 0) {
     state.speedNorm = 0.4;
     updateSpeedUI();
   }
-  // Softly begin centering on the chosen point while zoom continues
   state.needsRender = true;
   if (hintEl) hintEl.style.display = "none";
-}
-
-function zoomAt(clientX, clientY, factor) {
-  const before = screenToComplex(clientX, clientY);
-  const next = Math.min(MAX_SCALE, Math.max(MIN_SCALE, state.scale * factor));
-  state.scale = next;
-  const after = screenToComplex(clientX, clientY);
-  state.centerX += before.x - after.x;
-  state.centerY += before.y - after.y;
-  // Keep target under the same screen point intent when pinching
-  state.needsRender = true;
-  if (state.scale <= MIN_SCALE * 1.01) {
-    state.atLimit = true;
-    limitNote.hidden = false;
-  } else {
-    state.atLimit = false;
-    limitNote.hidden = true;
-  }
 }
 
 function pointerDistance() {
@@ -219,14 +179,14 @@ function bindPointer(target) {
         state.dragStart = {
           x: e.clientX,
           y: e.clientY,
-          cx: state.centerX,
-          cy: state.centerY,
+          aimX: state.aimX,
+          aimY: state.aimY,
           moved: false,
         };
         state.tapCandidate = { x: e.clientX, y: e.clientY };
       } else if (state.pointerIds.size === 2) {
         state.pinchStartDist = pointerDistance();
-        state.pinchStartScale = state.scale;
+        state.pinchStartLogZoom = state.logZoom;
         state.dragStart = null;
         state.tapCandidate = null;
       }
@@ -242,14 +202,10 @@ function bindPointer(target) {
 
       if (state.pointerIds.size === 2 && state.pinchStartDist > 0) {
         const dist = pointerDistance();
-        const pts = [...state.pointerIds.values()];
-        const midX = (pts[0].x + pts[1].x) / 2;
-        const midY = (pts[0].y + pts[1].y) / 2;
-        const targetScale = Math.min(
-          MAX_SCALE,
-          Math.max(MIN_SCALE, state.pinchStartScale * (state.pinchStartDist / Math.max(dist, 1)))
-        );
-        zoomAt(midX, midY, targetScale / state.scale);
+        // Pinch in (smaller distance) → dive deeper
+        const factor = state.pinchStartDist / Math.max(dist, 1);
+        state.logZoom = Math.max(0, state.pinchStartLogZoom + Math.log(Math.max(factor, 1e-3)));
+        state.needsRender = true;
         state.tapCandidate = null;
       } else if (state.dragStart && state.pointerIds.size === 1) {
         const dx = e.clientX - state.dragStart.x;
@@ -258,14 +214,10 @@ function bindPointer(target) {
           state.dragStart.moved = true;
           state.tapCandidate = null;
           const rect = canvas.getBoundingClientRect();
-          const ndx = (dx / rect.width) * 2;
-          const ndy = -((dy / rect.height) * 2);
-          const aspect = canvas.width / Math.max(1, canvas.height);
-          state.centerX = state.dragStart.cx - ndx * aspect * state.scale;
-          state.centerY = state.dragStart.cy - ndy * state.scale;
-          // Dragging re-aims to the new view center
-          state.targetX = state.centerX;
-          state.targetY = state.centerY;
+          state.aimX = state.dragStart.aimX - (dx / rect.width) * 1.4;
+          state.aimY = state.dragStart.aimY + (dy / rect.height) * 1.4;
+          state.aimX = Math.max(-1.5, Math.min(1.5, state.aimX));
+          state.aimY = Math.max(-1.5, Math.min(1.5, state.aimY));
           state.needsRender = true;
         }
       }
@@ -284,9 +236,7 @@ function bindPointer(target) {
     state.pointerIds.delete(e.pointerId);
     if (state.pointerIds.size < 2) state.pinchStartDist = 0;
     if (state.pointerIds.size === 0) {
-      if (wasTap) {
-        chooseTarget(state.tapCandidate.x, state.tapCandidate.y);
-      }
+      if (wasTap) chooseTarget(state.tapCandidate.x, state.tapCandidate.y);
       state.dragStart = null;
       state.tapCandidate = null;
     }
@@ -297,7 +247,8 @@ function bindPointer(target) {
     "wheel",
     (e) => {
       e.preventDefault();
-      zoomAt(e.clientX, e.clientY, Math.exp(e.deltaY * 0.0015));
+      state.logZoom = Math.max(0, state.logZoom - e.deltaY * 0.0015);
+      state.needsRender = true;
     },
     { passive: false }
   );
@@ -309,10 +260,6 @@ speedSlider.addEventListener("input", () => {
   state.speedNorm = Number(speedSlider.value) / 100;
   updateSpeedUI();
   if (state.speedNorm > 0 && !state.auto) setAuto(true);
-  if (state.speedNorm > 0) {
-    state.atLimit = false;
-    limitNote.hidden = true;
-  }
 });
 
 autoBtn.addEventListener("click", () => {
@@ -341,18 +288,13 @@ setAuto(true);
 
 window.__SHINSO__ = {
   getState: () => ({
-    scale: state.scale,
-    zoom: INITIAL_SCALE / Math.max(state.scale, 1e-30),
+    logZoom: state.logZoom,
+    zoom: effectiveZoom(),
     auto: state.auto,
-    atLimit: state.atLimit,
-    deep: state.scale < DEEP_SCALE,
-    centerX: state.centerX,
-    centerY: state.centerY,
-    targetX: state.targetX,
-    targetY: state.targetY,
+    aimX: state.aimX,
+    aimY: state.aimY,
     renderer: renderer.kind,
-    minScale: MIN_SCALE,
-    hasDeep: !!renderer.hasDeep,
+    infinite: true,
   }),
   setSpeed: (n) => {
     state.speedNorm = Math.max(0, Math.min(1, n));
@@ -363,49 +305,13 @@ window.__SHINSO__ = {
   reset: resetView,
 };
 
-console.info(
-  "[深層] renderer:",
-  renderer.kind,
-  "hasDeep:",
-  !!renderer.hasDeep,
-  "minScale:",
-  MIN_SCALE,
-  "(continuous, no site hop)"
-);
+console.info("[深層] fake-infinite renderer:", renderer.kind);
 
 let lastT = performance.now();
 let hudAcc = 0;
 
-function diveIn(dt) {
-  const rate = zoomRateFromSlider(state.speedNorm);
-  if (rate <= 0) return;
-
-  if (state.scale <= MIN_SCALE) {
-    state.scale = MIN_SCALE;
-    state.atLimit = true;
-    limitNote.hidden = false;
-    return;
-  }
-
-  state.scale *= Math.exp(-rate * dt);
-  if (state.scale < MIN_SCALE) state.scale = MIN_SCALE;
-
-  // Continuously home toward the user-chosen target while zooming in — no jumps
-  const pull = 1 - Math.exp(-1.8 * dt);
-  state.centerX += (state.targetX - state.centerX) * pull;
-  state.centerY += (state.targetY - state.centerY) * pull;
-  state.needsRender = true;
-
-  if (state.scale <= MIN_SCALE) {
-    state.atLimit = true;
-    limitNote.hidden = false;
-  }
-}
-
 function tick(now) {
-  // Wall-clock zoom: SPEED stays honest even if a heavy frame hitches
-  const rawDt = Math.max(0, (now - lastT) / 1000);
-  const dt = Math.min(0.25, rawDt);
+  const dt = Math.min(0.1, Math.max(0, (now - lastT) / 1000));
   lastT = now;
 
   if (state.aimHideTimer > 0) {
@@ -413,11 +319,20 @@ function tick(now) {
     if (state.aimHideTimer <= 0) aimEl.classList.remove("show");
   }
 
-  if (state.auto) diveIn(dt);
+  if (state.auto) {
+    const rate = zoomRateFromSlider(state.speedNorm);
+    if (rate > 0) {
+      state.logZoom += rate * dt;
+      // Gentle aim drift so filaments keep evolving even without taps
+      state.aimX += Math.sin(now * 0.00007 + state.logZoom * 0.02) * 0.02 * dt;
+      state.aimY += Math.cos(now * 0.00005 + state.logZoom * 0.017) * 0.02 * dt;
+      state.needsRender = true;
+    }
+  }
 
   if (renderer.resize()) state.needsRender = true;
 
-  const iters = iterationBudget(state.scale);
+  const iters = iterationBudget();
   hudAcc += dt;
   if (hudAcc > 0.1) {
     hudAcc = 0;
@@ -428,15 +343,15 @@ function tick(now) {
   if (state.needsRender || state.auto) {
     try {
       renderer.render({
-        centerX: state.centerX,
-        centerY: state.centerY,
-        scale: state.scale,
+        logZoom: state.logZoom,
+        aimX: state.aimX,
+        aimY: state.aimY,
         iters,
         time: now * 0.001,
         palette: state.palette,
       });
     } catch (err) {
-      console.error("render failed", err);
+      console.error(err);
     }
     state.needsRender = false;
   }
