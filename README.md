@@ -2,6 +2,23 @@
 
 スマホで見れる、マンデルブロ集合を**永遠に自動拡大**するフラクタル探索アプリ。
 
+## スマホで見る
+
+### いちばん簡単（公開 URL）
+
+GitHub の Settings → Pages で Source を `gh-pages` / `/ (root)` にすると、次の URL で開けます。
+
+**https://eternitybios-dot.github.io/manderobro/**
+
+### ローカルから同じ Wi-Fi のスマホで見る
+
+```bash
+npm install
+npm run dev -- --host
+```
+
+ターミナルの `Network` URL（例: `http://192.168.x.x:5173`）をスマホのブラウザで開く。
+
 ## 使い方
 
 1. 開くと自動で拡大が始まります
@@ -17,6 +34,8 @@ npm install
 npm run dev
 ```
 
+同じ Wi-Fi のスマホから見る場合は、ターミナルに表示される `Network` の URL を開いてください。
+
 本番ビルド:
 
 ```bash
@@ -29,3 +48,4 @@ npm run preview
 - WebGL2 フラグメントシェーダで描画
 - double-float（疑似倍精度）で深いズームに対応
 - タッチ操作（ピンチ / ドラッグ）対応
+- GitHub Pages で公開
