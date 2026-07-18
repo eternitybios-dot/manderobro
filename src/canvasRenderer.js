@@ -1,10 +1,8 @@
-/** CPU fallback: one continuous Mandelbrot dive → connected Julia handoff. */
-
-const HANDOFF_LOG = 9.5;
-const HANDOFF_WIDTH = 2.8;
-const LOG_PERIOD = Math.log(6);
-const BASE_SPAN = 2.6;
-const JULIA_SPAN = 2.35;
+/**
+ * CPU fallback: direct double-precision Mandelbrot. float64 keeps the
+ * picture clean far deeper than the WebGL1 float path; main.js turns the
+ * dive around at maxLogZoom, so this stays one honest continuous zoom.
+ */
 
 function palette(t, mode, time) {
   t = (t + time * 0.018) % 1;
@@ -23,16 +21,16 @@ function palette(t, mode, time) {
   ];
 }
 
-function escape(z0x, z0y, kx, ky, maxI) {
-  let zx = z0x;
-  let zy = z0y;
+function escape(cx, cy, maxI) {
+  let zx = 0;
+  let zy = 0;
   let i = 0;
   for (; i < maxI; i++) {
     const zx2 = zx * zx;
     const zy2 = zy * zy;
-    if (zx2 + zy2 > 256) break;
-    const nzx = zx2 - zy2 + kx;
-    zy = 2 * zx * zy + ky;
+    if (zx2 + zy2 > 65536) break;
+    const nzx = zx2 - zy2 + cx;
+    zy = 2 * zx * zy + cy;
     zx = nzx;
   }
   if (i >= maxI) return -1;
@@ -51,47 +49,11 @@ function colorize(s, time, paletteMode) {
   ];
 }
 
-function sampleField(uvx, uvy, centerX, centerY, span, juliaMix, jx, jy, maxI, time, paletteMode) {
-  const cx = centerX + uvx * span;
-  const cy = centerY + uvy * span;
-  const z0x = juliaMix * cx;
-  const z0y = juliaMix * cy;
-  const kx = cx * (1 - juliaMix) + jx * juliaMix;
-  const ky = cy * (1 - juliaMix) + jy * juliaMix;
-  return colorize(escape(z0x, z0y, kx, ky, maxI), time, paletteMode);
-}
-
-function layerWeight(phase) {
-  return 0.5 - 0.5 * Math.cos(Math.PI * 2 * Math.max(0, Math.min(1, phase)));
-}
-
-function smoothstep(e0, e1, x) {
-  const t = Math.min(1, Math.max(0, (x - e0) / (e1 - e0)));
-  return t * t * (3 - 2 * t);
-}
-
-function fakeJulia(uvx, uvy, deep, jx, jy, aimX, aimY, maxI, time, paletteMode) {
-  const crawlAmp = 0.42 * smoothstep(0, 2.5, deep);
-  const focusX = crawlAmp * Math.sin(deep * 0.022 + aimX * 0.9) + aimX * (0.12 * smoothstep(0.5, 3, deep));
-  const focusY = crawlAmp * Math.cos(deep * 0.019 + aimY * 0.85) + aimY * (0.12 * smoothstep(0.5, 3, deep));
-
-  const lf = deep / LOG_PERIOD + 0.3;
-  const p0 = lf - Math.floor(lf);
-  const p1 = lf - 0.5 - Math.floor(lf - 0.5);
-  const span0 = JULIA_SPAN / Math.exp(p0 * LOG_PERIOD);
-  const span1 = JULIA_SPAN / Math.exp(p1 * LOG_PERIOD);
-  const w0 = Math.max(layerWeight(p0), 0.001);
-  const w1 = Math.max(layerWeight(p1), 0.001);
-  const a = sampleField(uvx, uvy, focusX, focusY, span0, 1, jx, jy, maxI, time, paletteMode);
-  const b = sampleField(uvx, uvy, focusX, focusY, span1, 1, jx, jy, maxI, time, paletteMode);
-  const inv = 1 / (w0 + w1);
-  return [(a[0] * w0 + b[0] * w1) * inv, (a[1] * w0 + b[1] * w1) * inv, (a[2] * w0 + b[2] * w1) * inv];
-}
-
 export function createCanvasRenderer(canvas) {
   const ctx = canvas.getContext("2d", { alpha: false, desynchronized: true });
   if (!ctx) throw new Error("Canvas2D unavailable");
   let imageData = null;
+  let lastParams = null;
 
   function resize() {
     const w = Math.max(180, Math.floor(window.innerWidth * 0.35));
@@ -105,35 +67,26 @@ export function createCanvasRenderer(canvas) {
     return false;
   }
 
-  function render({ logZoom, centerX, centerY, aimX, aimY, iters, time, palette }) {
+  function render(p) {
     resize();
+    lastParams = p;
+    const { centerX, centerY, span, iters, time, palette: paletteMode } = p;
     const w = canvas.width;
     const h = canvas.height;
     if (!imageData) imageData = ctx.createImageData(w, h);
     const data = imageData.data;
     const aspect = w / h;
-    const lz = Math.max(logZoom, 0);
-    const maxI = Math.min(iters, 70);
-    const realLog = Math.min(lz, HANDOFF_LOG + HANDOFF_WIDTH * 0.85);
-    const realSpan = BASE_SPAN / Math.exp(realLog);
-    let handoff = smoothstep(HANDOFF_LOG, HANDOFF_LOG + HANDOFF_WIDTH, lz);
-    handoff = handoff * handoff * (3 - 2 * handoff);
-    const deep = Math.max(0, lz - HANDOFF_LOG);
+    const maxI = Math.min(iters, 90);
 
     for (let y = 0; y < h; y++) {
       const uvy = ((y + 0.5) / h) * 2 - 1;
       for (let x = 0; x < w; x++) {
         const uvx = (((x + 0.5) / w) * 2 - 1) * aspect;
-        const real = sampleField(uvx, uvy, centerX, centerY, realSpan, 0, centerX, centerY, maxI, time, palette);
-        let r = real[0];
-        let g = real[1];
-        let b = real[2];
-        if (handoff > 0) {
-          const fake = fakeJulia(uvx, uvy, deep, centerX, centerY, aimX, aimY, maxI, time, palette);
-          r = r * (1 - handoff) + fake[0] * handoff;
-          g = g * (1 - handoff) + fake[1] * handoff;
-          b = b * (1 - handoff) + fake[2] * handoff;
-        }
+        const [r, g, b] = colorize(
+          escape(centerX + uvx * span, centerY + uvy * span, maxI),
+          time,
+          paletteMode
+        );
         const idx = (y * w + x) * 4;
         data[idx] = r;
         data[idx + 1] = g;
@@ -144,5 +97,37 @@ export function createCanvasRenderer(canvas) {
     ctx.putImageData(imageData, 0, 0);
   }
 
-  return { kind: "canvas2d", resize, render, canvas, infinite: true };
+  function capture(gridW = 40, gridH = 60) {
+    if (lastParams) render(lastParams);
+    const w = canvas.width;
+    const h = canvas.height;
+    const px = ctx.getImageData(0, 0, w, h).data;
+    const sum = new Float64Array(gridW * gridH);
+    const cnt = new Float64Array(gridW * gridH);
+    for (let y = 0; y < h; y++) {
+      const gy = Math.min(gridH - 1, Math.floor((y / h) * gridH));
+      for (let x = 0; x < w; x++) {
+        const gx = Math.min(gridW - 1, Math.floor((x / w) * gridW));
+        const i = (y * w + x) * 4;
+        const cell = gy * gridW + gx;
+        sum[cell] += 0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2];
+        cnt[cell] += 1;
+      }
+    }
+    const out = new Array(gridW * gridH);
+    for (let i = 0; i < out.length; i++) out[i] = sum[i] / Math.max(1, cnt[i]);
+    return { w: gridW, h: gridH, luma: out };
+  }
+
+  return {
+    kind: "canvas2d",
+    needsReference: false,
+    maxLogZoom: 22, // float64 direct iteration; iter budget is the real limit here
+    canvas,
+    resize,
+    setScale() {},
+    getScale: () => 1,
+    render,
+    capture,
+  };
 }

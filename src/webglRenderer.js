@@ -1,5 +1,9 @@
 import { VERT_WEBGL1, VERT_WEBGL2, FRAG_WEBGL1, FRAG_WEBGL2 } from "./shaders.js";
 
+export const REF_TEX_W = 1024;
+export const REF_TEX_H = 4;
+export const MAX_REF_LEN = REF_TEX_W * REF_TEX_H;
+
 function createShader(gl, type, source) {
   const shader = gl.createShader(type);
   gl.shaderSource(shader, source);
@@ -54,24 +58,11 @@ function bindQuad(gl, program, isWebGL2) {
   };
 }
 
-function buildRenderer(canvas, gl, kind, vert, frag, isWebGL2) {
-  const program = createProgram(gl, vert, frag);
-  const bind = bindQuad(gl, program, isWebGL2);
-  const uniforms = {
-    res: gl.getUniformLocation(program, "u_res"),
-    aspect: gl.getUniformLocation(program, "u_aspect"),
-    logZoom: gl.getUniformLocation(program, "u_logZoom"),
-    center: gl.getUniformLocation(program, "u_center"),
-    aim: gl.getUniformLocation(program, "u_aim"),
-    time: gl.getUniformLocation(program, "u_time"),
-    palette: gl.getUniformLocation(program, "u_palette"),
-    iters: gl.getUniformLocation(program, "u_iters"),
-  };
-
-  function resize() {
+function makeResize(canvas, gl, state) {
+  return function resize() {
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const w = Math.max(1, Math.floor(window.innerWidth * dpr));
-    const h = Math.max(1, Math.floor(window.innerHeight * dpr));
+    const w = Math.max(1, Math.floor(window.innerWidth * dpr * state.scale));
+    const h = Math.max(1, Math.floor(window.innerHeight * dpr * state.scale));
     if (canvas.width !== w || canvas.height !== h) {
       canvas.width = w;
       canvas.height = h;
@@ -79,36 +70,171 @@ function buildRenderer(canvas, gl, kind, vert, frag, isWebGL2) {
       return true;
     }
     return false;
+  };
+}
+
+/**
+ * Box-averaged luminance grid of the current drawing buffer (for
+ * verification). Cell averages stay stable across buffer-resolution
+ * changes, unlike point samples of high-frequency fractal detail.
+ */
+function makeCapture(gl, canvas, renderLast) {
+  return function capture(gridW = 40, gridH = 60) {
+    renderLast(); // redraw so the buffer is valid in this task
+    const w = canvas.width;
+    const h = canvas.height;
+    const px = new Uint8Array(w * h * 4);
+    gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    const sum = new Float64Array(gridW * gridH);
+    const cnt = new Float64Array(gridW * gridH);
+    for (let y = 0; y < h; y++) {
+      const gy = Math.min(gridH - 1, Math.floor((y / h) * gridH));
+      for (let x = 0; x < w; x++) {
+        const gx = Math.min(gridW - 1, Math.floor((x / w) * gridW));
+        const i = (y * w + x) * 4;
+        const cell = gy * gridW + gx;
+        sum[cell] += 0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2];
+        cnt[cell] += 1;
+      }
+    }
+    const out = new Array(gridW * gridH);
+    for (let i = 0; i < out.length; i++) out[i] = sum[i] / Math.max(1, cnt[i]);
+    return { w: gridW, h: gridH, luma: out };
+  };
+}
+
+function buildWebGL2(canvas, gl) {
+  const program = createProgram(gl, VERT_WEBGL2, FRAG_WEBGL2);
+  const bind = bindQuad(gl, program, true);
+  const u = {
+    res: gl.getUniformLocation(program, "u_res"),
+    aspect: gl.getUniformLocation(program, "u_aspect"),
+    ref: gl.getUniformLocation(program, "u_ref"),
+    refLen: gl.getUniformLocation(program, "u_refLen"),
+    span: gl.getUniformLocation(program, "u_span"),
+    offset: gl.getUniformLocation(program, "u_offset"),
+    iters: gl.getUniformLocation(program, "u_iters"),
+    time: gl.getUniformLocation(program, "u_time"),
+    palette: gl.getUniformLocation(program, "u_palette"),
+  };
+
+  const refTex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, refTex);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  const padded = new Float32Array(MAX_REF_LEN * 2);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RG32F, REF_TEX_W, REF_TEX_H, 0, gl.RG, gl.FLOAT, padded);
+
+  let refLen = 1;
+  const state = { scale: 1 };
+  const resize = makeResize(canvas, gl, state);
+  let lastParams = null;
+
+  function uploadReference(orbit, len) {
+    refLen = Math.max(1, Math.min(len, MAX_REF_LEN));
+    padded.fill(0);
+    padded.set(orbit.subarray(0, refLen * 2));
+    gl.bindTexture(gl.TEXTURE_2D, refTex);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, REF_TEX_W, REF_TEX_H, gl.RG, gl.FLOAT, padded);
   }
 
-  function render({ logZoom, centerX, centerY, aimX, aimY, iters, time, palette }) {
-    resize();
+  function draw(p) {
     gl.useProgram(program);
     bind();
-    gl.uniform2f(uniforms.res, canvas.width, canvas.height);
-    gl.uniform1f(uniforms.aspect, canvas.width / Math.max(1, canvas.height));
-    gl.uniform1f(uniforms.logZoom, logZoom);
-    gl.uniform2f(uniforms.center, centerX, centerY);
-    gl.uniform2f(uniforms.aim, aimX, aimY);
-    gl.uniform1f(uniforms.time, time);
-    gl.uniform1f(uniforms.palette, palette);
-    gl.uniform1f(uniforms.iters, iters);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, refTex);
+    gl.uniform1i(u.ref, 0);
+    gl.uniform2f(u.res, canvas.width, canvas.height);
+    gl.uniform1f(u.aspect, canvas.width / Math.max(1, canvas.height));
+    gl.uniform1i(u.refLen, refLen);
+    gl.uniform1f(u.span, p.span);
+    gl.uniform2f(u.offset, p.offsetX, p.offsetY);
+    gl.uniform1f(u.iters, p.iters);
+    gl.uniform1f(u.time, p.time);
+    gl.uniform1f(u.palette, p.palette);
     gl.drawArrays(gl.TRIANGLES, 0, 6);
   }
 
-  resize();
-  render({
-    logZoom: 0,
-    centerX: -0.5,
-    centerY: 0,
-    aimX: 0,
-    aimY: 0,
-    iters: 120,
-    time: 0,
-    palette: 0,
-  });
+  function render(p) {
+    resize();
+    lastParams = p;
+    draw(p);
+  }
 
-  return { kind, resize, render, canvas, infinite: true };
+  const capture = makeCapture(gl, canvas, () => lastParams && draw(lastParams));
+
+  resize();
+  return {
+    kind: "webgl2-perturb",
+    needsReference: true,
+    maxRefLen: MAX_REF_LEN,
+    maxLogZoom: 60, // span ~2.3e-26 — comfortably inside float32 for per-pixel deltas
+    canvas,
+    resize,
+    setScale(s) {
+      state.scale = Math.max(0.35, Math.min(1, s));
+    },
+    getScale: () => state.scale,
+    uploadReference,
+    render,
+    capture,
+  };
+}
+
+function buildWebGL1(canvas, gl) {
+  const program = createProgram(gl, VERT_WEBGL1, FRAG_WEBGL1);
+  const bind = bindQuad(gl, program, false);
+  const u = {
+    res: gl.getUniformLocation(program, "u_res"),
+    aspect: gl.getUniformLocation(program, "u_aspect"),
+    center: gl.getUniformLocation(program, "u_center"),
+    span: gl.getUniformLocation(program, "u_span"),
+    iters: gl.getUniformLocation(program, "u_iters"),
+    time: gl.getUniformLocation(program, "u_time"),
+    palette: gl.getUniformLocation(program, "u_palette"),
+  };
+
+  const state = { scale: 1 };
+  const resize = makeResize(canvas, gl, state);
+  let lastParams = null;
+
+  function draw(p) {
+    gl.useProgram(program);
+    bind();
+    gl.uniform2f(u.res, canvas.width, canvas.height);
+    gl.uniform1f(u.aspect, canvas.width / Math.max(1, canvas.height));
+    gl.uniform2f(u.center, p.centerX, p.centerY);
+    gl.uniform1f(u.span, p.span);
+    gl.uniform1f(u.iters, Math.min(p.iters, 300));
+    gl.uniform1f(u.time, p.time);
+    gl.uniform1f(u.palette, p.palette);
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+  }
+
+  function render(p) {
+    resize();
+    lastParams = p;
+    draw(p);
+  }
+
+  const capture = makeCapture(gl, canvas, () => lastParams && draw(lastParams));
+
+  resize();
+  return {
+    kind: "webgl1",
+    needsReference: false,
+    maxLogZoom: 8.5, // float32 direct iteration stays clean to ~×5000
+    canvas,
+    resize,
+    setScale(s) {
+      state.scale = Math.max(0.35, Math.min(1, s));
+    },
+    getScale: () => state.scale,
+    render,
+    capture,
+  };
 }
 
 function replaceCanvas(oldCanvas) {
@@ -131,7 +257,7 @@ export function createWebGLRenderer(canvas) {
     });
     if (gl2) {
       poisoned = true;
-      return buildRenderer(canvas, gl2, "webgl2", VERT_WEBGL2, FRAG_WEBGL2, true);
+      return buildWebGL2(canvas, gl2);
     }
   } catch (err) {
     console.warn("WebGL2 failed:", err);
@@ -146,7 +272,7 @@ export function createWebGLRenderer(canvas) {
         alpha: false,
       }) || target.getContext("experimental-webgl", { antialias: false, alpha: false });
     if (gl1) {
-      return buildRenderer(target, gl1, "webgl1", VERT_WEBGL1, FRAG_WEBGL1, false);
+      return buildWebGL1(target, gl1);
     }
   } catch (err) {
     console.warn("WebGL1 failed:", err);
