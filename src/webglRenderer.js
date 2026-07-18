@@ -1,10 +1,4 @@
-import { VERT, FRAG } from "./shaders.js";
-
-function splitDouble(x) {
-  const hi = Math.fround(x);
-  const lo = x - hi;
-  return [hi, lo];
-}
+import { VERT_WEBGL1, FRAG_WEBGL1, VERT_WEBGL2, FRAG_WEBGL2 } from "./shaders.js";
 
 function createShader(gl, type, source) {
   const shader = gl.createShader(type);
@@ -33,18 +27,7 @@ function createProgram(gl, vertSrc, fragSrc) {
   return program;
 }
 
-export function createWebGLRenderer(canvas) {
-  const gl = canvas.getContext("webgl2", {
-    antialias: false,
-    powerPreference: "high-performance",
-    alpha: false,
-    preserveDrawingBuffer: false,
-  });
-  if (!gl) return null;
-
-  const program = createProgram(gl, VERT, FRAG);
-  const vao = gl.createVertexArray();
-  gl.bindVertexArray(vao);
+function bindQuad(gl, program, isWebGL2) {
   const buf = gl.createBuffer();
   gl.bindBuffer(gl.ARRAY_BUFFER, buf);
   gl.bufferData(
@@ -52,13 +35,31 @@ export function createWebGLRenderer(canvas) {
     new Float32Array([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]),
     gl.STATIC_DRAW
   );
-  gl.enableVertexAttribArray(0);
-  gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
 
+  if (isWebGL2) {
+    const vao = gl.createVertexArray();
+    gl.bindVertexArray(vao);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+    return () => gl.bindVertexArray(vao);
+  }
+
+  const loc = gl.getAttribLocation(program, "a_pos");
+  gl.enableVertexAttribArray(loc);
+  gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+  return () => {
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.enableVertexAttribArray(loc);
+    gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+  };
+}
+
+function buildRenderer(canvas, gl, kind, vert, frag, isWebGL2) {
+  const program = createProgram(gl, vert, frag);
+  const bind = bindQuad(gl, program, isWebGL2);
   const uniforms = {
     res: gl.getUniformLocation(program, "u_res"),
-    centerHi: gl.getUniformLocation(program, "u_center_hi"),
-    centerLo: gl.getUniformLocation(program, "u_center_lo"),
+    center: gl.getUniformLocation(program, "u_center"),
     scale: gl.getUniformLocation(program, "u_scale"),
     iters: gl.getUniformLocation(program, "u_iters"),
     time: gl.getUniformLocation(program, "u_time"),
@@ -81,20 +82,80 @@ export function createWebGLRenderer(canvas) {
 
   function render({ centerX, centerY, scale, iters, time, palette }) {
     resize();
-    const [cxHi, cxLo] = splitDouble(centerX);
-    const [cyHi, cyLo] = splitDouble(centerY);
     gl.useProgram(program);
-    gl.bindVertexArray(vao);
+    bind();
     gl.uniform2f(uniforms.res, canvas.width, canvas.height);
-    gl.uniform2f(uniforms.centerHi, cxHi, cyHi);
-    gl.uniform2f(uniforms.centerLo, cxLo, cyLo);
+    gl.uniform2f(uniforms.center, centerX, centerY);
     gl.uniform1f(uniforms.scale, scale);
     gl.uniform1f(uniforms.iters, iters);
     gl.uniform1f(uniforms.time, time);
     gl.uniform1f(uniforms.palette, palette);
-    gl.uniform1f(uniforms.aspect, canvas.width / canvas.height);
+    gl.uniform1f(uniforms.aspect, canvas.width / Math.max(1, canvas.height));
     gl.drawArrays(gl.TRIANGLES, 0, 6);
   }
 
-  return { kind: "webgl2", resize, render };
+  resize();
+  render({
+    centerX: -0.5,
+    centerY: 0,
+    scale: 2.5,
+    iters: 80,
+    time: 0,
+    palette: 0,
+  });
+
+  return { kind, resize, render, canvas };
+}
+
+function replaceCanvas(oldCanvas) {
+  const host = oldCanvas.parentElement;
+  const fresh = document.createElement("canvas");
+  fresh.id = oldCanvas.id || "gl";
+  fresh.setAttribute("aria-label", oldCanvas.getAttribute("aria-label") || "マンデルブロ集合");
+  host.replaceChild(fresh, oldCanvas);
+  return fresh;
+}
+
+/** Try WebGL2, then WebGL1. Returns null if neither works. */
+export function createWebGLRenderer(canvas) {
+  let poisoned = false;
+
+  try {
+    const gl2 = canvas.getContext("webgl2", {
+      antialias: false,
+      powerPreference: "high-performance",
+      alpha: false,
+      preserveDrawingBuffer: false,
+    });
+    if (gl2) {
+      poisoned = true;
+      return buildRenderer(canvas, gl2, "webgl2", VERT_WEBGL2, FRAG_WEBGL2, true);
+    }
+  } catch (err) {
+    console.warn("WebGL2 Mandelbrot failed:", err);
+  }
+
+  const target = poisoned ? replaceCanvas(canvas) : canvas;
+
+  try {
+    const gl1 =
+      target.getContext("webgl", {
+        antialias: false,
+        powerPreference: "high-performance",
+        alpha: false,
+        preserveDrawingBuffer: false,
+      }) ||
+      target.getContext("experimental-webgl", {
+        antialias: false,
+        alpha: false,
+      });
+
+    if (gl1) {
+      return buildRenderer(target, gl1, "webgl1", VERT_WEBGL1, FRAG_WEBGL1, false);
+    }
+  } catch (err) {
+    console.warn("WebGL1 Mandelbrot failed:", err);
+  }
+
+  return poisoned ? { kind: "failed", canvas: target, resize: () => false, render: () => {} } : null;
 }
