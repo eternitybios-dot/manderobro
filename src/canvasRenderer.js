@@ -1,20 +1,11 @@
-/** Fast-enough CPU Mandelbrot for phones without WebGL. */
+/** CPU Mandelbrot fallback — keep resolution high enough to avoid mosaic look. */
 
 function paletteColor(t, mode, time) {
   t = (t + time * 0.035) % 1;
   if (t < 0) t += 1;
-  let r;
-  let g;
-  let b;
-  if (mode < 1.5) {
-    r = 0.5 + 0.5 * Math.cos(6.28318 * (t + 0.0) + 0.2);
-    g = 0.5 + 0.5 * Math.cos(6.28318 * (t + 0.18) + 1.4);
-    b = 0.5 + 0.5 * Math.cos(6.28318 * (t + 0.33) + 2.1);
-  } else {
-    r = 0.55 + 0.45 * Math.cos(6.28318 * (t + 0.05) + 1.8);
-    g = 0.55 + 0.45 * Math.cos(6.28318 * (t + 0.22) + 0.9);
-    b = 0.55 + 0.45 * Math.cos(6.28318 * (t + 0.4) + 0.3);
-  }
+  const r = 0.5 + 0.5 * Math.cos(6.28318 * (t + 0.0) + 0.2);
+  const g = 0.5 + 0.5 * Math.cos(6.28318 * (t + 0.18) + 1.4);
+  const b = 0.5 + 0.5 * Math.cos(6.28318 * (t + 0.33) + 2.1);
   return [
     Math.max(0, Math.min(255, r * 255)),
     Math.max(0, Math.min(255, g * 255)),
@@ -30,9 +21,10 @@ export function createCanvasRenderer(canvas) {
   let row = 0;
 
   function resize() {
-    // Keep CPU path tiny so phones stay interactive
-    const w = Math.max(120, Math.floor(window.innerWidth * 0.28));
-    const h = Math.max(180, Math.floor(window.innerHeight * 0.28));
+    const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+    // Sharper than before — mosaic was mostly from upscaling a tiny buffer
+    const w = Math.max(280, Math.floor(window.innerWidth * dpr * 0.55));
+    const h = Math.max(400, Math.floor(window.innerHeight * dpr * 0.55));
     if (canvas.width !== w || canvas.height !== h) {
       canvas.width = w;
       canvas.height = h;
@@ -54,15 +46,14 @@ export function createCanvasRenderer(canvas) {
 
     const data = imageData.data;
     const aspect = w / h;
-    const maxI = Math.min(iters, 140);
-    // Progressive: a chunk of rows each frame keeps UI alive
-    const rowsPerFrame = Math.max(8, Math.ceil(h / 6));
+    const maxI = Math.min(iters, 180);
+    const rowsPerFrame = Math.max(12, Math.ceil(h / 4));
 
     for (let n = 0; n < rowsPerFrame; n++) {
       const y = row % h;
-      const cy = centerY + ((y / h) * 2 - 1) * scale;
+      const cy = centerY + (((y + 0.5) / h) * 2 - 1) * scale;
       for (let x = 0; x < w; x++) {
-        const cx = centerX + ((x / w) * 2 - 1) * aspect * scale;
+        const cx = centerX + (((x + 0.5) / w) * 2 - 1) * aspect * scale;
         let zx = 0;
         let zy = 0;
         let i = 0;
@@ -96,5 +87,12 @@ export function createCanvasRenderer(canvas) {
     ctx.putImageData(imageData, 0, 0);
   }
 
-  return { kind: "canvas2d", resize, render, canvas, deep: true };
+  return {
+    kind: "canvas2d",
+    resize,
+    render,
+    canvas,
+    // JS numbers are float64, but we still relay early for speed/quality
+    minScale: 4e-5,
+  };
 }

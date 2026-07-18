@@ -1,10 +1,5 @@
 import { VERT_WEBGL1, FRAG_WEBGL1, VERT_WEBGL2, FRAG_WEBGL2 } from "./shaders.js";
 
-function splitDouble(x) {
-  const hi = Math.fround(x);
-  return [hi, x - hi];
-}
-
 function createShader(gl, type, source) {
   const shader = gl.createShader(type);
   gl.shaderSource(shader, source);
@@ -59,13 +54,24 @@ function bindQuad(gl, program, isWebGL2) {
   };
 }
 
+function probePrecision(gl) {
+  const fmt = gl.getShaderPrecisionFormat(gl.FRAGMENT_SHADER, gl.HIGH_FLOAT);
+  // true highp roughly has precision >= 23 mantissa bits reported as range/precision
+  const okHighp = fmt && fmt.precision >= 23;
+  return {
+    highp: !!okHighp,
+    // Stay comfortably above the mosaic / blocky zone on real phones
+    minScale: okHighp ? 6e-5 : 2e-4,
+  };
+}
+
 function buildRenderer(canvas, gl, kind, vert, frag, isWebGL2) {
   const program = createProgram(gl, vert, frag);
   const bind = bindQuad(gl, program, isWebGL2);
+  const precision = probePrecision(gl);
   const uniforms = {
     res: gl.getUniformLocation(program, "u_res"),
-    centerHi: gl.getUniformLocation(program, "u_center_hi"),
-    centerLo: gl.getUniformLocation(program, "u_center_lo"),
+    center: gl.getUniformLocation(program, "u_center"),
     scale: gl.getUniformLocation(program, "u_scale"),
     iters: gl.getUniformLocation(program, "u_iters"),
     time: gl.getUniformLocation(program, "u_time"),
@@ -88,13 +94,10 @@ function buildRenderer(canvas, gl, kind, vert, frag, isWebGL2) {
 
   function render({ centerX, centerY, scale, iters, time, palette }) {
     resize();
-    const [cxHi, cxLo] = splitDouble(centerX);
-    const [cyHi, cyLo] = splitDouble(centerY);
     gl.useProgram(program);
     bind();
     gl.uniform2f(uniforms.res, canvas.width, canvas.height);
-    gl.uniform2f(uniforms.centerHi, cxHi, cyHi);
-    gl.uniform2f(uniforms.centerLo, cxLo, cyLo);
+    gl.uniform2f(uniforms.center, centerX, centerY);
     gl.uniform1f(uniforms.scale, scale);
     gl.uniform1f(uniforms.iters, iters);
     gl.uniform1f(uniforms.time, time);
@@ -107,13 +110,20 @@ function buildRenderer(canvas, gl, kind, vert, frag, isWebGL2) {
   render({
     centerX: -0.7436438870371587,
     centerY: 0.13182590420531197,
-    scale: 0.01,
+    scale: 0.05,
     iters: 120,
     time: 0,
     palette: 0,
   });
 
-  return { kind, resize, render, canvas, deep: true };
+  return {
+    kind,
+    resize,
+    render,
+    canvas,
+    minScale: precision.minScale,
+    highp: precision.highp,
+  };
 }
 
 function replaceCanvas(oldCanvas) {

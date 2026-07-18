@@ -2,8 +2,8 @@ import { createWebGLRenderer } from "./webglRenderer.js";
 import { createCanvasRenderer } from "./canvasRenderer.js";
 
 /**
- * Deep dive landmarks. We never pull back to the big overview during auto-zoom —
- * when precision runs out we relay into the next site mid-dive so zoom never ends.
+ * Deep-looking landmarks. Auto-zoom relays BEFORE float precision turns
+ * the image into a mosaic, so the dive stays sharp forever.
  */
 const DIVE_SITES = [
   { x: -0.7436438870371587, y: 0.13182590420531197 },
@@ -17,12 +17,14 @@ const DIVE_SITES = [
   { x: -0.235125, y: 0.827215 },
   { x: -0.10109636384562, y: 0.95628651080914 },
   { x: -0.81159812898999, y: 0.18969156891408 },
-  { x: -1.7497229303, y: 0.00000000000029 },
+  { x: -0.374978534, y: 0.659846321 },
+  { x: -1.25066, y: 0.02012 },
+  { x: 0.001643721971153, y: -0.822467633298876 },
 ];
 
 const INITIAL_SCALE = 2.5;
-/** After a precision relay, resume mid-dive (still looks deep, not a reset). */
-const RELAY_SCALE = 1.5e-3;
+/** Resume each leg still sharp, with a long clear dive ahead. */
+const RELAY_SCALE = 0.085;
 const MAX_SCALE = 3.5;
 
 const zoomLabel = document.getElementById("zoomLabel");
@@ -65,8 +67,8 @@ function createRenderer() {
 
 const renderer = createRenderer();
 
-/** How deep we can go before GPU/CPU precision fails. */
-const MIN_SCALE = renderer.kind === "canvas2d" ? 1e-15 : 2e-13;
+/** Relay before the mosaic zone — never wait for precision death. */
+const MIN_SCALE = renderer.minScale || 8e-5;
 
 const state = {
   centerX: DIVE_SITES[0].x,
@@ -76,14 +78,17 @@ const state = {
   auto: true,
   speedNorm: 0.55,
   palette: 0,
-  /** Multiplier so ZOOM HUD keeps growing across infinite relays. */
   zoomCarry: 1,
   pointerIds: new Map(),
   pinchStartDist: 0,
   pinchStartScale: 1,
   dragStart: null,
   needsRender: true,
-  warpFlash: 0,
+  /** Soft handoff instead of a hard jump */
+  relaying: false,
+  relayT: 0,
+  relayFrom: { x: 0, y: 0, scale: 1 },
+  relayTo: { x: 0, y: 0, scale: RELAY_SCALE },
 };
 
 function effectiveZoom() {
@@ -103,10 +108,9 @@ function formatZoom() {
 function iterationBudget(scale) {
   const zoom = Math.max(1, INITIAL_SCALE / scale);
   if (renderer.kind === "canvas2d") {
-    return Math.min(220, Math.floor(70 + 20 * Math.log2(zoom + 1)));
+    return Math.min(200, Math.floor(80 + 22 * Math.log2(zoom + 1)));
   }
-  // Deep double-float needs more iterations as we dive
-  return Math.min(1400, Math.floor(140 + 42 * Math.log2(zoom + 1)));
+  return Math.min(420, Math.floor(140 + 30 * Math.log2(zoom + 1)));
 }
 
 function zoomRateFromSlider(norm) {
@@ -145,23 +149,37 @@ function cyclePalette() {
   state.needsRender = true;
 }
 
-/** Keep diving forever: hop to next landmark mid-zoom, never pull out to overview. */
-function relayDive() {
+function easeInOut(t) {
+  return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+}
+
+/** Start a soft relay into the next landmark — still zooming, always sharp. */
+function beginRelay() {
+  if (state.relaying) return;
+
   const prevScale = state.scale;
-  // Keep the ZOOM counter continuous across the hop
   state.zoomCarry *= RELAY_SCALE / Math.max(prevScale, 1e-30);
 
   state.siteIndex = (state.siteIndex + 1) % DIVE_SITES.length;
   const site = DIVE_SITES[state.siteIndex];
-  state.centerX = site.x;
-  state.centerY = site.y;
-  state.scale = RELAY_SCALE;
-  state.warpFlash = 0.35;
-  state.needsRender = true;
+
+  state.relaying = true;
+  state.relayT = 0;
+  state.relayFrom = {
+    x: state.centerX,
+    y: state.centerY,
+    scale: state.scale,
+  };
+  state.relayTo = {
+    x: site.x,
+    y: site.y,
+    scale: RELAY_SCALE,
+  };
 
   appEl.classList.remove("warp");
-  void appEl.offsetWidth; // reflow so animation retriggers
+  void appEl.offsetWidth;
   appEl.classList.add("warp");
+  state.needsRender = true;
 }
 
 function resetView() {
@@ -170,7 +188,8 @@ function resetView() {
   state.centerY = DIVE_SITES[0].y;
   state.scale = INITIAL_SCALE;
   state.zoomCarry = 1;
-  state.warpFlash = 0;
+  state.relaying = false;
+  state.relayT = 0;
   setAuto(true);
   if (state.speedNorm <= 0) state.speedNorm = 0.55;
   updateSpeedUI();
@@ -190,10 +209,11 @@ function screenToComplex(clientX, clientY) {
 }
 
 function zoomAt(clientX, clientY, factor) {
+  if (state.relaying) return;
   const before = screenToComplex(clientX, clientY);
-  let next = state.scale * factor;
+  const next = state.scale * factor;
   if (next < MIN_SCALE) {
-    relayDive();
+    beginRelay();
     return;
   }
   state.scale = Math.min(MAX_SCALE, next);
@@ -244,7 +264,7 @@ function bindPointer(target) {
         const midY = (pts[0].y + pts[1].y) / 2;
         const targetScale = Math.min(
           MAX_SCALE,
-          Math.max(MIN_SCALE * 1.01, state.pinchStartScale * (state.pinchStartDist / Math.max(dist, 1)))
+          Math.max(MIN_SCALE * 1.05, state.pinchStartScale * (state.pinchStartDist / Math.max(dist, 1)))
         );
         zoomAt(midX, midY, targetScale / state.scale);
       } else if (state.dragStart && state.pointerIds.size === 1) {
@@ -308,7 +328,7 @@ window.addEventListener("resize", () => {
 renderer.resize();
 updateSpeedUI();
 setAuto(true);
-console.info("[深層] renderer:", renderer.kind, "minScale:", MIN_SCALE);
+console.info("[深層] renderer:", renderer.kind, "minScale:", MIN_SCALE, "highp:", renderer.highp);
 
 let lastT = performance.now();
 let hudAcc = 0;
@@ -317,25 +337,35 @@ function tick(now) {
   const dt = Math.min(0.05, (now - lastT) / 1000);
   lastT = now;
 
-  if (state.warpFlash > 0) {
-    state.warpFlash = Math.max(0, state.warpFlash - dt);
-  }
-
-  if (state.auto) {
+  if (state.relaying) {
+    // Short soft handoff: log-lerp scale + lerp center, keep diving afterward
+    state.relayT += dt * 1.8;
+    const t = Math.min(1, state.relayT);
+    const e = easeInOut(t);
+    state.centerX = state.relayFrom.x + (state.relayTo.x - state.relayFrom.x) * e;
+    state.centerY = state.relayFrom.y + (state.relayTo.y - state.relayFrom.y) * e;
+    const logFrom = Math.log(Math.max(state.relayFrom.scale, 1e-30));
+    const logTo = Math.log(state.relayTo.scale);
+    state.scale = Math.exp(logFrom + (logTo - logFrom) * e);
+    state.needsRender = true;
+    if (t >= 1) {
+      state.relaying = false;
+      state.centerX = state.relayTo.x;
+      state.centerY = state.relayTo.y;
+      state.scale = state.relayTo.scale;
+    }
+  } else if (state.auto) {
     const rate = zoomRateFromSlider(state.speedNorm);
     if (rate > 0) {
       state.scale *= Math.exp(-rate * dt);
-
-      // Keep the landmark centered while diving
       const site = DIVE_SITES[state.siteIndex];
-      const pull = 1 - Math.exp(-0.45 * dt);
+      const pull = 1 - Math.exp(-0.5 * dt);
       state.centerX += (site.x - state.centerX) * pull;
       state.centerY += (site.y - state.centerY) * pull;
       state.needsRender = true;
 
-      // Eternal: relay into the next abyss instead of stopping / resetting
       if (state.scale <= MIN_SCALE) {
-        relayDive();
+        beginRelay();
       }
     }
   }
@@ -350,7 +380,7 @@ function tick(now) {
     iterLabel.textContent = String(iters);
   }
 
-  if (state.needsRender || state.auto) {
+  if (state.needsRender || state.auto || state.relaying) {
     try {
       renderer.render({
         centerX: state.centerX,

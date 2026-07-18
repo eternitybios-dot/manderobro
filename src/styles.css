@@ -66,7 +66,9 @@ body {
   width: 100%;
   height: 100%;
   display: block;
+  /* Smooth upscale if GPU buffer != CSS size; avoid crunchy nearest-neighbor */
   image-rendering: auto;
+  image-rendering: high-quality;
 }
 
 .vignette {
