@@ -2,6 +2,12 @@
 
 タップで場所を選んで、**ひとつの映像のまま途切れず拡大**するスマホ向けフラクタル探索アプリ。
 
+## スマホで見る
+
+**https://rawcdn.githack.com/eternitybios-dot/manderobro/1aa0dba9541f3438e4f63e71318f3637bd2ef24b/site/index.html**
+
+(このURLはコミット固定です。最新版は `npm run build:single` で `site/index.html` を再生成してコミットし、新しいコミットハッシュのURLを使ってください)
+
 ## 本物のディープズーム
 
 擬似的な繋ぎ(Julia へのクロスフェードなど)は使いません。**摂動法(perturbation)**で描画します:
@@ -26,7 +32,7 @@ APP_URL=http://127.0.0.1:4173/ npm run verify:motion
 npm run deploy
 ```
 
-※ 旧ライブURL (elastic-rift-ualaf37.shipstatic.com) は旧実装のままです。`npm run deploy` で新しいビルドを配信してください。
+※ 旧ライブURL (elastic-rift-ualaf37.shipstatic.com) は旧実装のままです。shipstatic に配信し直す場合は `npm run deploy` を使ってください。
 
 `verify:motion` は数値カウンタではなく**映像そのもの**を検証します:
 
