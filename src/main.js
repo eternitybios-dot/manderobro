@@ -90,6 +90,8 @@ const state = {
 let ref = null;
 let lastRefBuild = 0;
 let lostRebuilds = 0;
+let recoveredRebuilds = 0;
+let ascentReason = null; // "floor" | "lost" | null
 
 function effectiveZoom() {
   return Math.exp(state.logZoom);
@@ -192,7 +194,7 @@ function ensureReference(force = false, steer = state.auto && state.dir > 0) {
     !ref ||
     requiredShift(state.logZoom) > ref.shift ||
     offMag > 0.4 * span ||
-    state.logZoom - ref.lzBuilt > 1.2 || // keep boundary lock through fast zooms
+    Math.abs(state.logZoom - ref.lzBuilt) > 0.8 || // keep boundary lock through fast zooms (and re-evaluate while surfacing)
     (budget > ref.iters && !ref.escaped);
   if (!stale && !force) return;
   if (!force && now - lastRefBuild < 250) return;
@@ -213,33 +215,56 @@ function ensureReference(force = false, steer = state.auto && state.dir > 0) {
   renderer.uploadReference(built.orbit, built.len);
 
   // Auto-steer: stay glued to the boundary so there is always structure ahead.
-  if (steer) {
+  if (steer || state.auto) {
     const s = steerOffset(built.orbit, built.len, span, iters, state.aimX, state.aimY);
-    if (!Number.isFinite(s.score) && !s.centerOk) {
-      // Nothing resolvable anywhere nearby — we fell into a featureless void.
-      // Surface (still continuous) until structure comes back into view.
-      lostRebuilds++;
-      if (lostRebuilds >= 2 && state.auto && state.dir > 0) {
-        state.dir = -1;
-        setLimitNote("この先は構造がありません — 映像はそのまま浮上します");
+    const lost =
+      (!Number.isFinite(s.score) && !s.centerOk) || // all interior — blank void
+      s.spread < 2; // escape counts flat everywhere — featureless exterior
+
+    if (steer || state.dir > 0) {
+      if (lost) {
+        // Nothing to steer toward: no gradient means the dive would zoom
+        // into flatness forever. Surface (still continuous) until structure
+        // comes back into view.
+        lostRebuilds++;
+        if (lostRebuilds >= 2 && state.auto && state.dir > 0 && !steer) {
+          state.dir = -1;
+          ascentReason = "lost";
+          recoveredRebuilds = 0;
+          setLimitNote("この先は構造がありません — 映像はそのまま浮上します");
+        }
+      } else {
+        lostRebuilds = 0;
       }
-    } else {
-      lostRebuilds = 0;
-    }
-    if (Number.isFinite(s.score)) {
-      let gx = s.dx;
-      let gy = s.dy;
-      // While the center is still on structure, keep the crawl gentle so the
-      // dive reads as diving, not sliding. Full-length moves are reserved for
-      // recovering a lost boundary.
-      const mag = Math.hypot(gx, gy);
-      const cap = s.centerOk ? 0.2 * span : Infinity;
-      if (mag > cap) {
-        gx *= cap / mag;
-        gy *= cap / mag;
+      if (Number.isFinite(s.score)) {
+        let gx = s.dx;
+        let gy = s.dy;
+        // While the center is still on structure, keep the crawl gentle so
+        // the dive reads as diving, not sliding. Full-length moves are
+        // reserved for recovering a lost boundary.
+        const mag = Math.hypot(gx, gy);
+        const cap = s.centerOk ? 0.25 * span : Infinity;
+        if (mag > cap) {
+          gx *= cap / mag;
+          gy *= cap / mag;
+        }
+        state.steerGoal.x = gx;
+        state.steerGoal.y = gy;
       }
-      state.steerGoal.x = gx;
-      state.steerGoal.y = gy;
+    } else if (ascentReason === "lost") {
+      // Surfacing away from a void: resume the dive as soon as structure is
+      // reliably back instead of climbing all the way up.
+      if (!lost) {
+        recoveredRebuilds++;
+        if (recoveredRebuilds >= 2) {
+          state.dir = 1;
+          ascentReason = null;
+          lostRebuilds = 0;
+          setLimitNote(null);
+        }
+      } else {
+        recoveredRebuilds = 0;
+      }
     }
   }
   state.needsRender = true;
@@ -254,6 +279,9 @@ function resetView() {
   state.aimX = 0.1;
   state.aimY = 0.2;
   ref = null;
+  lostRebuilds = 0;
+  recoveredRebuilds = 0;
+  ascentReason = null;
   setAuto(true);
   if (state.speedNorm <= 0) state.speedNorm = DEFAULT_SPEED;
   updateSpeedUI();
@@ -277,6 +305,8 @@ function chooseTarget(clientX, clientY) {
   state.aimX = Math.max(-1, Math.min(1, nx));
   state.aimY = Math.max(-1, Math.min(1, ny));
   state.dir = 1;
+  ascentReason = null;
+  lostRebuilds = 0;
   setLimitNote(null);
 
   showAim(clientX, clientY);
@@ -535,9 +565,12 @@ function tick(now) {
       if (state.logZoom >= MAX_LOG_ZOOM) {
         state.logZoom = MAX_LOG_ZOOM;
         state.dir = -1;
+        ascentReason = "floor";
         setLimitNote("精度の底に到達 — 映像はそのまま、ゆっくり浮上して別の谷へ潜り直します");
       } else if (state.dir < 0 && state.logZoom <= SURFACE_LOG) {
         state.dir = 1;
+        ascentReason = null;
+        lostRebuilds = 0;
         setLimitNote(null);
         // Vary the next dive: nudge the aim so steering explores a new path.
         const a = Math.random() * Math.PI * 2;
@@ -549,7 +582,7 @@ function tick(now) {
   }
 
   // Glide the view center toward the steering goal — smooth, span-scaled.
-  const ease = 1 - Math.exp(-dt * 1.8);
+  const ease = 1 - Math.exp(-dt * 2.5);
   state.viewOff.x += (state.steerGoal.x - state.viewOff.x) * ease;
   state.viewOff.y += (state.steerGoal.y - state.viewOff.y) * ease;
   if (

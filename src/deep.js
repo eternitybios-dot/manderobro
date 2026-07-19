@@ -141,9 +141,15 @@ export function steerOffset(orbit, refLen, span, maxIter, aimX, aimY) {
   let bestScore = -Infinity;
   let bestDx = 0;
   let bestDy = 0;
+  let minFinite = Infinity;
+  let maxFinite = -Infinity;
+  let sawInterior = false;
   const centerScore = escapeCount(0, 0, orbit, refLen, maxIter);
   if (centerScore > 0) {
     bestScore = centerScore + 6; // mild inertia: keep course unless clearly better
+    minFinite = maxFinite = centerScore;
+  } else {
+    sawInterior = true;
   }
   const probeRing = (r, count) => {
     let found = false;
@@ -154,8 +160,13 @@ export function steerOffset(orbit, refLen, span, maxIter, aimX, aimY) {
       const dcx = ux * r * span;
       const dcy = uy * r * span;
       const s = escapeCount(dcx, dcy, orbit, refLen, maxIter);
-      if (s < 0) continue; // interior at this budget — unresolvable, skip
+      if (s < 0) {
+        sawInterior = true;
+        continue; // interior at this budget — unresolvable, skip
+      }
       found = true;
+      if (s < minFinite) minFinite = s;
+      if (s > maxFinite) maxFinite = s;
       const aimBias = 3 * (ux * aimX + uy * aimY);
       const score = s + aimBias;
       if (score > bestScore) {
@@ -166,12 +177,16 @@ export function steerOffset(orbit, refLen, span, maxIter, aimX, aimY) {
     }
     return found;
   };
-  for (const r of [0.18, 0.42]) probeRing(r, 8);
+  for (const r of [0.18, 0.42, 0.8]) probeRing(r, 8);
   // Boundary lost (e.g. after a fast pinch): widen the search outward.
   if (!Number.isFinite(bestScore)) {
     for (const r of [1.0, 2.2, 4.5]) {
       if (probeRing(r, 12)) break;
     }
   }
-  return { dx: bestDx, dy: bestDy, score: bestScore, centerOk: centerScore > 0 };
+  // How much the escape counts vary around here. Near the boundary this is
+  // large (chaotic); in featureless exterior it collapses toward 0, which
+  // means there is no gradient left to climb — nothing ahead but flatness.
+  const spread = !Number.isFinite(maxFinite) ? 0 : sawInterior ? Infinity : maxFinite - minFinite;
+  return { dx: bestDx, dy: bestDy, score: bestScore, centerOk: centerScore > 0, spread };
 }
