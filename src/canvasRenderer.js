@@ -1,10 +1,12 @@
-/** CPU fallback: one continuous Mandelbrot dive → connected Julia handoff. */
+/**
+ * CPU fallback: real Mandelbrot dive → exactly self-similar Julia spiral
+ * around the repelling fixed point (same math as the shader).
+ */
 
-const HANDOFF_LOG = 9.5;
-const HANDOFF_WIDTH = 2.8;
-const LOG_PERIOD = Math.log(6);
+const HANDOFF_LOG = 9.0;
+const HANDOFF_WIDTH = 3.0;
 const BASE_SPAN = 2.6;
-const JULIA_SPAN = 2.35;
+const JULIA_SPAN0 = 0.026;
 
 function palette(t, mode, time) {
   t = (t + time * 0.018) % 1;
@@ -51,41 +53,9 @@ function colorize(s, time, paletteMode) {
   ];
 }
 
-function sampleField(uvx, uvy, centerX, centerY, span, juliaMix, jx, jy, maxI, time, paletteMode) {
-  const cx = centerX + uvx * span;
-  const cy = centerY + uvy * span;
-  const z0x = juliaMix * cx;
-  const z0y = juliaMix * cy;
-  const kx = cx * (1 - juliaMix) + jx * juliaMix;
-  const ky = cy * (1 - juliaMix) + jy * juliaMix;
-  return colorize(escape(z0x, z0y, kx, ky, maxI), time, paletteMode);
-}
-
-function layerWeight(phase) {
-  return 0.5 - 0.5 * Math.cos(Math.PI * 2 * Math.max(0, Math.min(1, phase)));
-}
-
 function smoothstep(e0, e1, x) {
   const t = Math.min(1, Math.max(0, (x - e0) / (e1 - e0)));
   return t * t * (3 - 2 * t);
-}
-
-function fakeJulia(uvx, uvy, deep, jx, jy, aimX, aimY, maxI, time, paletteMode) {
-  const crawlAmp = 0.42 * smoothstep(0, 2.5, deep);
-  const focusX = crawlAmp * Math.sin(deep * 0.022 + aimX * 0.9) + aimX * (0.12 * smoothstep(0.5, 3, deep));
-  const focusY = crawlAmp * Math.cos(deep * 0.019 + aimY * 0.85) + aimY * (0.12 * smoothstep(0.5, 3, deep));
-
-  const lf = deep / LOG_PERIOD + 0.3;
-  const p0 = lf - Math.floor(lf);
-  const p1 = lf - 0.5 - Math.floor(lf - 0.5);
-  const span0 = JULIA_SPAN / Math.exp(p0 * LOG_PERIOD);
-  const span1 = JULIA_SPAN / Math.exp(p1 * LOG_PERIOD);
-  const w0 = Math.max(layerWeight(p0), 0.001);
-  const w1 = Math.max(layerWeight(p1), 0.001);
-  const a = sampleField(uvx, uvy, focusX, focusY, span0, 1, jx, jy, maxI, time, paletteMode);
-  const b = sampleField(uvx, uvy, focusX, focusY, span1, 1, jx, jy, maxI, time, paletteMode);
-  const inv = 1 / (w0 + w1);
-  return [(a[0] * w0 + b[0] * w1) * inv, (a[1] * w0 + b[1] * w1) * inv, (a[2] * w0 + b[2] * w1) * inv];
 }
 
 export function createCanvasRenderer(canvas) {
@@ -105,7 +75,7 @@ export function createCanvasRenderer(canvas) {
     return false;
   }
 
-  function render({ logZoom, centerX, centerY, aimX, aimY, iters, time, palette }) {
+  function render({ logZoom, centerX, centerY, fixX, fixY, lnLam, argLam, w0X, w0Y, iters, time, palette }) {
     resize();
     const w = canvas.width;
     const h = canvas.height;
@@ -113,31 +83,49 @@ export function createCanvasRenderer(canvas) {
     const data = imageData.data;
     const aspect = w / h;
     const lz = Math.max(logZoom, 0);
-    const maxI = Math.min(iters, 70);
-    const realLog = Math.min(lz, HANDOFF_LOG + HANDOFF_WIDTH * 0.85);
+    const maxI = Math.min(iters, 90);
+    const handoff = smoothstep(HANDOFF_LOG, HANDOFF_LOG + HANDOFF_WIDTH, lz);
+
+    const realLog = Math.min(lz, HANDOFF_LOG + HANDOFF_WIDTH);
     const realSpan = BASE_SPAN / Math.exp(realLog);
-    let handoff = smoothstep(HANDOFF_LOG, HANDOFF_LOG + HANDOFF_WIDTH, lz);
-    handoff = handoff * handoff * (3 - 2 * handoff);
-    const deep = Math.max(0, lz - HANDOFF_LOG);
+
+    const d = Math.max(0, lz - HANDOFF_LOG);
+    const n = Math.floor(d / lnLam);
+    const r = d - n * lnLam;
+    const ang = -(r / lnLam) * argLam;
+    const scale = Math.exp(-r);
+    const ca = Math.cos(ang);
+    const sa = Math.sin(ang);
 
     for (let y = 0; y < h; y++) {
       const uvy = ((y + 0.5) / h) * 2 - 1;
       for (let x = 0; x < w; x++) {
         const uvx = (((x + 0.5) / w) * 2 - 1) * aspect;
-        const real = sampleField(uvx, uvy, centerX, centerY, realSpan, 0, centerX, centerY, maxI, time, palette);
-        let r = real[0];
-        let g = real[1];
-        let b = real[2];
-        if (handoff > 0) {
-          const fake = fakeJulia(uvx, uvy, deep, centerX, centerY, aimX, aimY, maxI, time, palette);
-          r = r * (1 - handoff) + fake[0] * handoff;
-          g = g * (1 - handoff) + fake[1] * handoff;
-          b = b * (1 - handoff) + fake[2] * handoff;
+        let rr = 0;
+        let gg = 0;
+        let bb = 0;
+        if (handoff < 0.999) {
+          const s = escape(0, 0, centerX + uvx * realSpan, centerY + uvy * realSpan, maxI);
+          const col = colorize(s, time, palette);
+          rr = col[0];
+          gg = col[1];
+          bb = col[2];
+        }
+        if (handoff > 0.001) {
+          const bx = (w0X || 0) + uvx * JULIA_SPAN0;
+          const by = (w0Y || 0) + uvy * JULIA_SPAN0;
+          const wx = scale * (ca * bx - sa * by);
+          const wy = scale * (sa * bx + ca * by);
+          const s = escape(fixX + wx, fixY + wy, centerX, centerY, maxI);
+          const col = colorize(s < 0 ? s : s + n, time, palette);
+          rr = rr * (1 - handoff) + col[0] * handoff;
+          gg = gg * (1 - handoff) + col[1] * handoff;
+          bb = bb * (1 - handoff) + col[2] * handoff;
         }
         const idx = (y * w + x) * 4;
-        data[idx] = r;
-        data[idx + 1] = g;
-        data[idx + 2] = b;
+        data[idx] = rr;
+        data[idx + 1] = gg;
+        data[idx + 2] = bb;
         data[idx + 3] = 255;
       }
     }

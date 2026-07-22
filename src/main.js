@@ -9,8 +9,51 @@ import { createCanvasRenderer } from "./canvasRenderer.js";
 
 const TAP_SLOP_PX = 12;
 const BASE_SPAN = 2.6;
-const DEFAULT_CENTER = { x: -0.743643887037151, y: 0.131825904205330 };
+const HANDOFF_LOG = 9.0; // must match shaders.js — deep phase starts here
+// Classic seahorse-valley parameter: Julia(c) is connected, so the deep
+// spiral around the repelling fixed point stays dense and colorful.
+const DEFAULT_CENTER = { x: -0.74543, y: 0.11301 };
 const DEFAULT_SPEED = 0.28;
+
+/**
+ * Repelling fixed point z* of z^2+c and its multiplier λ = 2z*.
+ * The Julia set is exactly self-similar around z* under w → λw,
+ * which is what makes the deep phase seamless.
+ */
+function computeSelfSim(cx, cy) {
+  // s = sqrt(1 - 4c) (principal branch)
+  const ax = 1 - 4 * cx;
+  const ay = -4 * cy;
+  const r = Math.hypot(ax, ay);
+  const sx = Math.sqrt(Math.max((r + ax) / 2, 0));
+  let sy = Math.sqrt(Math.max((r - ax) / 2, 0));
+  if (ay < 0) sy = -sy;
+  // Fixed points (1 ± s)/2 → multipliers 1 ± s; pick the repelling one.
+  const cand = [
+    { lx: 1 + sx, ly: sy },
+    { lx: 1 - sx, ly: -sy },
+  ];
+  const pick = Math.hypot(cand[0].lx, cand[0].ly) >= Math.hypot(cand[1].lx, cand[1].ly)
+    ? cand[0]
+    : cand[1];
+  const absL = Math.max(Math.hypot(pick.lx, pick.ly), 1.02);
+  const fixX = pick.lx / 2;
+  const fixY = pick.ly / 2;
+  // Offset the deep window toward the dense side of the Julia set
+  // (roughly from the fixed-point tip toward the origin).
+  const dirX = cx - fixX;
+  const dirY = cy - fixY;
+  const dirLen = Math.max(Math.hypot(dirX, dirY), 1e-6);
+  const W0_DIST = 0.021;
+  return {
+    fixX,
+    fixY,
+    lnLam: Math.log(absL),
+    argLam: Math.atan2(pick.ly, pick.lx),
+    w0X: (dirX / dirLen) * W0_DIST,
+    w0Y: (dirY / dirLen) * W0_DIST,
+  };
+}
 
 const zoomLabel = document.getElementById("zoomLabel");
 const iterLabel = document.getElementById("iterLabel");
@@ -57,6 +100,7 @@ const state = {
   logZoom: 0.8,
   centerX: DEFAULT_CENTER.x,
   centerY: DEFAULT_CENTER.y,
+  selfSim: computeSelfSim(DEFAULT_CENTER.x, DEFAULT_CENTER.y),
   aimX: 0.1,
   aimY: 0.2,
   auto: true,
@@ -94,7 +138,8 @@ function iterationBudget() {
   if (renderer.kind === "canvas2d") {
     return Math.min(90, Math.floor(60 + depth * 2));
   }
-  return Math.min(200, Math.floor(100 + depth * 4));
+  // Deep phase magnitudes are bounded, so iterations plateau — no slowdown.
+  return Math.min(320, Math.floor(110 + depth * 20));
 }
 
 /** Slow by default — fake continuation needs time to read as continuous. */
@@ -146,6 +191,7 @@ function resetView() {
   state.logZoom = 0.8;
   state.centerX = DEFAULT_CENTER.x;
   state.centerY = DEFAULT_CENTER.y;
+  state.selfSim = computeSelfSim(state.centerX, state.centerY);
   state.aimX = 0.1;
   state.aimY = 0.2;
   setAuto(true);
@@ -164,9 +210,13 @@ function chooseTarget(clientX, clientY) {
   const aspect = rect.width / Math.max(1, rect.height);
   const span = currentSpan();
 
-  // Move the one center toward the tapped complex point (no scene switch).
-  state.centerX += nx * aspect * span * 0.42;
-  state.centerY += ny * span * 0.42;
+  // Steering only works in the real phase; once the seamless deep spiral
+  // has taken over, changing the center would cause a visible jump.
+  if (state.logZoom < HANDOFF_LOG) {
+    state.centerX += nx * aspect * span * 0.42;
+    state.centerY += ny * span * 0.42;
+    state.selfSim = computeSelfSim(state.centerX, state.centerY);
+  }
   state.aimX = Math.max(-1, Math.min(1, nx));
   state.aimY = Math.max(-1, Math.min(1, ny));
 
@@ -231,13 +281,16 @@ function bindPointer(target) {
         if (Math.hypot(dx, dy) > TAP_SLOP_PX) {
           state.dragStart.moved = true;
           state.tapCandidate = null;
-          const rect = canvas.getBoundingClientRect();
-          const span = currentSpan();
-          const aspect = rect.width / Math.max(1, rect.height);
-          state.centerX = state.dragStart.centerX - (dx / rect.width) * 2 * aspect * span;
-          state.centerY = state.dragStart.centerY + (dy / rect.height) * 2 * span;
-          state.aimX = Math.max(-1, Math.min(1, state.dragStart.aimX - (dx / rect.width) * 1.2));
-          state.aimY = Math.max(-1, Math.min(1, state.dragStart.aimY + (dy / rect.height) * 1.2));
+          if (state.logZoom < HANDOFF_LOG) {
+            const rect = canvas.getBoundingClientRect();
+            const span = currentSpan();
+            const aspect = rect.width / Math.max(1, rect.height);
+            state.centerX = state.dragStart.centerX - (dx / rect.width) * 2 * aspect * span;
+            state.centerY = state.dragStart.centerY + (dy / rect.height) * 2 * span;
+            state.selfSim = computeSelfSim(state.centerX, state.centerY);
+            state.aimX = Math.max(-1, Math.min(1, state.dragStart.aimX - (dx / rect.width) * 1.2));
+            state.aimY = Math.max(-1, Math.min(1, state.dragStart.aimY + (dy / rect.height) * 1.2));
+          }
           state.needsRender = true;
         }
       }
@@ -325,6 +378,10 @@ window.__SHINSO__ = {
     updateSpeedUI();
     if (state.speedNorm > 0) setAuto(true);
   },
+  setLogZoom: (v) => {
+    state.logZoom = Math.max(0, Number(v) || 0);
+    state.needsRender = true;
+  },
   chooseTargetAt: (x, y) => chooseTarget(x, y),
   reset: resetView,
 };
@@ -371,6 +428,12 @@ function tick(now) {
         logZoom: state.logZoom,
         centerX: state.centerX,
         centerY: state.centerY,
+        fixX: state.selfSim.fixX,
+        fixY: state.selfSim.fixY,
+        lnLam: state.selfSim.lnLam,
+        argLam: state.selfSim.argLam,
+        w0X: state.selfSim.w0X,
+        w0Y: state.selfSim.w0Y,
         aimX: state.aimX,
         aimY: state.aimY,
         iters,
