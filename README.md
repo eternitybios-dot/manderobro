@@ -6,14 +6,16 @@
 
 ## スマホで見る
 
-**https://elastic-rift-ualaf37.shipstatic.com**
+**https://silent-zenith-54khf4c.shipstatic.com**
 
 - タップで拡大する場所を選ぶ
 - ドラッグで視点をずらす / ピンチで拡大縮小
 - SPEED で速さ変更（初期値はゆっくり）
 - 精度限界でも止まらず、繋がった形状のまま潜り続けます
 
-恒久化（任意）: https://my.shipstatic.com/claim/105a5945f8579df64555a3361e748dec26ff8158c2ab4fa32a95a16932f67f5e
+恒久化（任意）: https://my.shipstatic.com/claim/513b3e6106790a8dfa2d53adc941258f7d2340c1df1658d86cff8fb5be421626
+
+※ 匿名デプロイは数日で期限切れになります。残したい場合は上の claim リンクから恒久化してください。
 
 ## 開発
 
