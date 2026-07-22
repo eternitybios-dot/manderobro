@@ -1,0 +1,11 @@
+{
+  "name": "深層 — Infinite Mandelbrot",
+  "short_name": "深層",
+  "start_url": "./",
+    "scope": "./",
+
+  "display": "standalone",
+  "background_color": "#041015",
+  "theme_color": "#041015",
+  "description": "マンデルブロ集合を永遠に自動拡大できるスマホ向けアプリ"
+}
